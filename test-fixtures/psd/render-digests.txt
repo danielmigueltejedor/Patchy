@@ -14,6 +14,7 @@ dff91f04e9037b1d f85231cf2f579c75 photoshop-both-masks-params.psd
 0407e7f5209e8df5 01f79d9a7acab8f5 photoshop-brightness-contrast-legacy.psd
 b0b3f988dd6a07cd b7070b9de475b945 photoshop-brightness-contrast-modern.psd
 dbe44fcc955c8025 241f758e61704165 photoshop-channel-restrictions.psd
+9750c045d9803085 3ea89ceacb80d1b5 photoshop-clip-base-effects.psd
 1d70dd256c3b0325 745dac33488e4c25 photoshop-clipping-mask.psd
 f980a29156bff7cf 5eb6a1308b31a4eb photoshop-cmyk-style-colors.psd
 cf8b789d734b2b2d 3a35db9013be5915 photoshop-color-balance-full.psd
@@ -66,6 +67,7 @@ df9ef81f9987b96d bb2d8e2794a03819 photoshop-shape-gradient.psd
 55aebce64a43ded0 ac08986158b2bf56 photoshop-shape-pattern.psd
 f6d5a6e903ff35df 8c1dd51eb6355d53 photoshop-shape-solid.psd
 cd31e6edc8e597c9 3c72c11a14a9a94f photoshop-shape-strokes.psd
+d884b4a413fd4884 14911349c5e35d82 photoshop-size-zero-effects.psd
 d1ed7990ee556233 89f51fd5a4313af5 photoshop-smart-filter-add-noise-gaussian.psd
 77d30efc9669a292 b24cbcd2a9f6f68a photoshop-smart-filter-add-noise.psd
 c34cf6d3a2b44849 ec07eaf898b0a29d photoshop-smart-filter-box-blur.psd
