@@ -215,7 +215,53 @@ namespace patchy::ui {
 
 namespace {
 
+
 constexpr int kWindowResizeBorder = 10;
+
+#ifdef Q_OS_LINUX
+class AdwaitaHeaderBar final : public QToolBar {
+ public:
+  explicit AdwaitaHeaderBar(QWidget* parent = nullptr) : QToolBar(parent) {
+    setObjectName(QStringLiteral("adwaitaHeaderBar"));
+    setMovable(false);
+    setFloatable(false);
+    setAllowedAreas(Qt::TopToolBarArea);
+    setContextMenuPolicy(Qt::PreventContextMenu);
+    setFixedHeight(46);
+  }
+
+ protected:
+  void mousePressEvent(QMouseEvent* event) override {
+    if (event->button() == Qt::LeftButton) {
+      if (auto* handle = window()->windowHandle();
+          handle != nullptr && handle->startSystemMove()) {
+        event->accept();
+        return;
+      }
+    }
+
+    QToolBar::mousePressEvent(event);
+  }
+
+  void mouseDoubleClickEvent(QMouseEvent* event) override {
+    if (event->button() == Qt::LeftButton) {
+      auto* target = window();
+
+      if (target->isMaximized()) {
+        target->showNormal();
+      } else {
+        target->showMaximized();
+      }
+
+      event->accept();
+      return;
+    }
+
+    QToolBar::mouseDoubleClickEvent(event);
+  }
+};
+#endif
+
 
 Qt::Edges resize_edges_for_window_position(QSize window_size, QPoint position) {
   Qt::Edges edges;
@@ -360,7 +406,7 @@ void apply_windows_pen_feedback_suppression(WId window_id) {
 }  // namespace
 
 bool MainWindow::use_custom_window_chrome() {
-#ifdef Q_OS_WIN
+#if defined(Q_OS_WIN) || defined(Q_OS_LINUX)
   return true;
 #else
   return false;
@@ -433,6 +479,16 @@ bool MainWindow::handle_window_resize_event(QObject* watched, QEvent* event) {
       edges == Qt::Edges{}) {
     return false;
   }
+
+#ifndef Q_OS_WIN
+  // Wayland compositors own interactive resizing. Asking the compositor
+  // avoids client-side geometry hacks and behaves like a native GNOME CSD.
+  if (auto* handle = windowHandle();
+      handle != nullptr && handle->startSystemResize(edges)) {
+    mouse_event->accept();
+    return true;
+  }
+#endif
 
   chrome_resize_edges_ = edges;
   chrome_resize_start_global_ = mouse_event->globalPosition().toPoint();
@@ -822,6 +878,124 @@ void MainWindow::configure_window_chrome() {
     return;
   }
   auto* bar = menuBar();
+#ifdef Q_OS_LINUX
+  /*
+     Linux uses a real client-side GNOME-style header bar.
+
+     The original QMenuBar remains alive as the owner of all existing
+     top-level menus, but is removed visually. The menu actions are exposed
+     from one primary-menu button instead.
+  */
+  bar->setNativeMenuBar(false);
+
+  auto* header = new AdwaitaHeaderBar(this);
+
+  if (auto* options = findChild<QToolBar*>(QStringLiteral("Options"));
+      options != nullptr) {
+    // HeaderBar gets its own full-width row. Tool options live below it.
+    insertToolBar(options, header);
+    insertToolBarBreak(options);
+  } else {
+    addToolBar(Qt::TopToolBarArea, header);
+    addToolBarBreak(Qt::TopToolBarArea);
+  }
+
+  auto* app_menu = new QMenu(header);
+  app_menu->setObjectName(QStringLiteral("headerAppMenu"));
+
+  for (auto* action : bar->actions()) {
+    if (action != nullptr && action->menu() != nullptr) {
+      app_menu->addAction(action);
+    }
+  }
+
+  bar->hide();
+
+  // Balance the controls on the right so the title remains truly centered.
+  auto* left_balance = new QWidget(header);
+  left_balance->setObjectName(QStringLiteral("adwaitaHeaderBalance"));
+  left_balance->setFixedWidth(60);
+  left_balance->setAttribute(Qt::WA_TransparentForMouseEvents);
+  header->addWidget(left_balance);
+
+  auto* left_stretch = new QWidget(header);
+  left_stretch->setObjectName(QStringLiteral("adwaitaHeaderStretch"));
+  left_stretch->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+  left_stretch->setAttribute(Qt::WA_TransparentForMouseEvents);
+  header->addWidget(left_stretch);
+
+  auto* title = new QLabel(header);
+  title->setObjectName(QStringLiteral("adwaitaHeaderTitle"));
+  title->setAlignment(Qt::AlignCenter);
+
+  QString header_title = QApplication::applicationDisplayName().trimmed();
+  if (header_title.isEmpty()) {
+    header_title = QApplication::applicationName().trimmed();
+  }
+  if (header_title.isEmpty()) {
+    header_title = QStringLiteral("Lienzo");
+  }
+
+  title->setText(header_title);
+  title->setAttribute(Qt::WA_TransparentForMouseEvents);
+  header->addWidget(title);
+
+  auto* right_stretch = new QWidget(header);
+  right_stretch->setObjectName(QStringLiteral("adwaitaHeaderStretch"));
+  right_stretch->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+  right_stretch->setAttribute(Qt::WA_TransparentForMouseEvents);
+  header->addWidget(right_stretch);
+
+  auto* menu_button = new QToolButton(header);
+  menu_button->setObjectName(QStringLiteral("headerMenuButton"));
+  menu_button->setPopupMode(QToolButton::InstantPopup);
+  menu_button->setMenu(app_menu);
+  menu_button->setFocusPolicy(Qt::NoFocus);
+  menu_button->setFixedSize(28, 28);
+
+  const auto menu_icon =
+      QIcon::fromTheme(QStringLiteral("open-menu-symbolic"));
+
+  if (!menu_icon.isNull()) {
+    menu_button->setIcon(menu_icon);
+    menu_button->setIconSize(QSize(16, 16));
+  } else {
+    menu_button->setText(QStringLiteral("☰"));
+  }
+
+  header->addWidget(menu_button);
+
+  auto* gnome_close_button = new QToolButton(header);
+  gnome_close_button->setObjectName(QStringLiteral("windowCloseButton"));
+  gnome_close_button->setProperty("windowChromeButton", true);
+  gnome_close_button->setFocusPolicy(Qt::NoFocus);
+  gnome_close_button->setFixedSize(28, 28);
+
+  auto close_icon =
+      QIcon::fromTheme(QStringLiteral("window-close-symbolic"));
+
+  if (close_icon.isNull()) {
+    close_icon = window_chrome_icon(QStringLiteral("close"));
+  }
+
+  gnome_close_button->setIcon(close_icon);
+  gnome_close_button->setIconSize(QSize(16, 16));
+
+  bind_tooltip(
+      gnome_close_button,
+      QT_TRANSLATE_NOOP("patchy::ui::MainWindow", "Close"));
+
+  header->addWidget(gnome_close_button);
+
+  connect(
+      gnome_close_button,
+      &QToolButton::clicked,
+      this,
+      &QWidget::close);
+
+  return;
+#endif
+
   bar->setNativeMenuBar(false);
   bar->setFixedHeight(34);
   bar->installEventFilter(this);

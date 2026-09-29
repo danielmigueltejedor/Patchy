@@ -262,7 +262,7 @@ QString photoshop_style_template() {
          gaps (Qt paints ::separator itself only mid-drag), so this is what
          makes the resting dividers between panels visible. */
       background: @dock_separator_bg;
-      border: 1px solid @window_border;
+      border: 0;
     }
     QMainWindow::separator {
       background: @dock_separator_bg;
@@ -310,13 +310,17 @@ QString photoshop_style_template() {
     QMenu {
       background: @menu_bg;
       border: 1px solid @menu_border;
+      border-radius: 10px;
+      padding: 6px;
     }
     QMenu::item {
-      padding: 7px 34px 7px 24px;
+      padding: 7px 30px 7px 12px;
+      margin: 1px 0;
+      border-radius: 6px;
     }
     QMenu::item:selected {
       background: @menu_item_selected_bg;
-      color: @text_on_accent;
+      color: @text_primary;
     }
     QMenu::item:disabled {
       color: @text_disabled;
@@ -339,7 +343,7 @@ QString photoshop_style_template() {
     QToolButton {
       background: transparent;
       border: 1px solid transparent;
-      border-radius: 6px;
+      border-radius: 8px;
       padding: 3px;
       min-width: 26px;
       min-height: 26px;
@@ -373,15 +377,21 @@ QString photoshop_style_template() {
     }
     QToolButton:hover {
       background: @button_hover_bg;
-      border-color: @button_hover_border;
+      border-color: transparent;
     }
     QToolButton:pressed {
       background: @window_chrome_pressed_bg;
-      border-color: @button_hover_border;
+      border-color: transparent;
     }
     QToolButton:checked {
+      background: @accent;
+      border-color: @accent;
+      color: @text_on_accent;
+    }
+    QToolButton:checked:hover {
       background: @accent_pressed_bg;
-      border-color: @accent_border_bright;
+      border-color: @accent_pressed_bg;
+      color: @text_on_accent;
     }
     /* Line-edit side widgets (the setClearButtonEnabled x, any addAction icon) are
        QToolButtons, so the rule above applied a 26 px minimum to them:
@@ -2186,6 +2196,673 @@ QString lienzo_refinement_style_template() {
 
 }  // namespace
 
+
+QString adwaita_refinement_style_template() {
+  return QStringLiteral(R"(
+
+    /* ================================================================
+       LIENZO — ADWAITA REFINEMENT
+       Final application-wide visual layer.
+       Keep this after the legacy/Lienzo styles while the migration is
+       incremental. No literal chrome colours: use ThemePalette tokens.
+       ================================================================ */
+
+    /* ---------- General surfaces ---------- */
+
+    QMainWindow,
+    QDialog {
+      background: @window_bg;
+      color: @text_primary;
+    }
+
+    QMainWindow {
+      border: 0;
+    }
+
+    QToolBar {
+      border: 0;
+    }
+
+    QToolTip {
+      background: @menu_bg;
+      color: @text_primary;
+      border: 1px solid @menu_border;
+      border-radius: 7px;
+      padding: 6px 8px;
+    }
+
+
+    /* ---------- Header / menubar ---------- */
+
+    QMenuBar {
+      background: @title_bar_bg;
+      border: 0;
+      border-bottom: 1px solid @title_bar_border;
+      padding: 0 6px;
+    }
+
+    QMenuBar::item {
+      background: transparent;
+      border: 0;
+      border-radius: 7px;
+      padding: 0 10px;
+      margin: 4px 1px;
+    }
+
+    QMenuBar::item:selected {
+      background: @menu_bar_item_hover_bg;
+      color: @text_primary;
+    }
+
+
+    /* ---------- Popovers / menus ---------- */
+
+    QMenu {
+      background: @menu_bg;
+      color: @text_primary;
+      border: 1px solid @menu_border;
+      border-radius: 12px;
+      padding: 6px;
+    }
+
+    QMenu::item {
+      background: transparent;
+      border-radius: 8px;
+      padding: 8px 14px;
+      margin: 1px 0;
+    }
+
+    QMenu::item:selected {
+      background: @button_hover_bg;
+      color: @text_primary;
+    }
+
+    QMenu::separator {
+      height: 1px;
+      background: @menu_separator;
+      margin: 5px 8px;
+    }
+
+
+    /* ---------- Generic buttons ---------- */
+
+    QPushButton {
+      background: @button_bg;
+      color: @text_primary;
+      border: 1px solid @button_border;
+      border-radius: 8px;
+      min-height: 30px;
+      padding: 2px 14px;
+    }
+
+    QPushButton:hover {
+      background: @neutral_button_hover_bg;
+      border-color: @neutral_button_hover_border;
+    }
+
+    QPushButton:pressed {
+      background: @window_chrome_pressed_bg;
+    }
+
+    QPushButton:focus {
+      border-color: @accent;
+    }
+
+    QPushButton:default {
+      background: @primary_bg;
+      color: @text_on_accent;
+      border-color: @primary_border;
+      font-weight: 600;
+    }
+
+    QPushButton:default:hover {
+      background: @primary_hover_bg;
+      border-color: @primary_hover_bg;
+    }
+
+    QPushButton:disabled {
+      color: @text_disabled;
+      background: @field_bg_disabled;
+      border-color: @field_border_disabled;
+    }
+
+
+    /* ---------- Flat icon buttons ---------- */
+
+    QToolButton {
+      background: transparent;
+      color: @text_primary;
+      border: 1px solid transparent;
+      border-radius: 8px;
+    }
+
+    QToolButton:hover {
+      background: @button_hover_bg;
+      border-color: transparent;
+    }
+
+    QToolButton:pressed {
+      background: @window_chrome_pressed_bg;
+      border-color: transparent;
+    }
+
+    QToolButton:checked {
+      background: @accent;
+      color: @text_on_accent;
+      border-color: @accent;
+    }
+
+    QToolButton:checked:hover {
+      background: @accent_pressed_bg;
+      border-color: @accent_pressed_bg;
+    }
+
+    QToolButton:focus {
+      border-color: @accent;
+    }
+
+
+    /* ---------- Inputs ---------- */
+
+    QLineEdit,
+    QSpinBox,
+    QDoubleSpinBox,
+    QComboBox,
+    QFontComboBox {
+      background: @field_bg_large;
+      color: @text_primary;
+      border: 1px solid @field_border;
+      border-radius: 8px;
+      min-height: 30px;
+      padding: 0 9px;
+      selection-background-color: @accent;
+      selection-color: @text_on_accent;
+    }
+
+    QLineEdit:hover,
+    QSpinBox:hover,
+    QDoubleSpinBox:hover,
+    QComboBox:hover,
+    QFontComboBox:hover {
+      border-color: @button_hover_border_strong;
+    }
+
+    QLineEdit:focus,
+    QSpinBox:focus,
+    QDoubleSpinBox:focus,
+    QComboBox:focus,
+    QFontComboBox:focus {
+      border: 2px solid @accent;
+      padding-left: 8px;
+      padding-right: 8px;
+    }
+
+    QLineEdit:disabled,
+    QSpinBox:disabled,
+    QDoubleSpinBox:disabled,
+    QComboBox:disabled {
+      background: @field_bg_disabled;
+      color: @field_text_disabled;
+      border-color: @field_border_disabled;
+    }
+
+    QComboBox::drop-down {
+      border: 0;
+      width: 24px;
+    }
+
+
+    /* ---------- Options/header toolbar ---------- */
+
+    QToolBar#Options {
+      background: @toolbar_bg;
+      border: 0;
+      border-bottom: 1px solid @toolbar_border;
+      min-height: 48px;
+      spacing: 8px;
+      padding: 6px 10px;
+    }
+
+    QToolBar#Options QLabel {
+      background: transparent;
+      border: 0;
+      color: @text_secondary;
+    }
+
+    QToolBar#Options QLabel[optionLabel="true"] {
+      color: @text_primary;
+      font-weight: 600;
+    }
+
+    QToolBar#Options QSpinBox,
+    QToolBar#Options QDoubleSpinBox,
+    QToolBar#Options QComboBox,
+    QToolBar#Options QFontComboBox {
+      background: @field_bg;
+      border: 1px solid @field_border;
+      border-radius: 8px;
+      min-height: 30px;
+      max-height: 30px;
+      padding: 0 8px;
+    }
+
+    QToolBar#Options QPushButton {
+      min-height: 30px;
+      max-height: 30px;
+      border-radius: 8px;
+      padding: 0 10px;
+    }
+
+    QToolBar#Options QToolButton {
+      border-radius: 8px;
+    }
+
+    QToolBar#Options QFrame#optionSeparator {
+      color: @option_separator;
+      max-width: 1px;
+      margin: 6px 3px;
+    }
+
+
+    /* ---------- Left tool palette ---------- */
+
+    QToolBar#toolPalette {
+      background: @tool_palette_bg;
+      border: 0;
+      border-right: 1px solid @tool_palette_border;
+      padding: 5px 4px;
+      spacing: 2px;
+    }
+
+    QToolBar#toolPalette QToolButton {
+      min-width: 30px;
+      max-width: 30px;
+      min-height: 28px;
+      max-height: 28px;
+      border-radius: 7px;
+      padding: 1px;
+    }
+
+    QToolBar#toolPalette QToolButton:hover {
+      background: @button_hover_bg;
+      border-color: transparent;
+    }
+
+    QToolBar#toolPalette QToolButton:checked {
+      background: @accent;
+      border-color: @accent;
+      color: @text_on_accent;
+    }
+
+    QToolBar#toolPalette::separator {
+      background: @tool_palette_separator;
+      height: 1px;
+      margin: 4px 8px;
+    }
+
+
+    /* ---------- Document tabs ---------- */
+
+    QTabBar#documentTabBar {
+      background: @toolbar_bg;
+      border: 0;
+    }
+
+    QTabBar#documentTabBar::tab {
+      background: transparent;
+      color: @text_secondary;
+      border: 0;
+      border-radius: 8px;
+      min-height: 30px;
+      padding: 0 12px;
+      margin: 4px 2px;
+    }
+
+    QTabBar#documentTabBar::tab:hover:!selected {
+      background: @tab_hover_bg;
+      color: @text_primary;
+    }
+
+    QTabBar#documentTabBar::tab:selected {
+      background: @tab_selected_bg;
+      color: @text_primary;
+      border: 0;
+      font-weight: 600;
+    }
+
+    QTabBar#documentTabBar[documentTabsInactive="true"]::tab:selected {
+      background: @tab_bg;
+      color: @text_secondary;
+    }
+
+
+    /* ---------- Generic tab/view switchers ---------- */
+
+    QTabBar::tab {
+      border-radius: 7px;
+    }
+
+    QTabBar::tab:selected {
+      color: @text_primary;
+    }
+
+
+    /* ---------- Right docks ---------- */
+
+    QDockWidget {
+      background: @panel_bg;
+      border: 0;
+    }
+
+    QDockWidget::title {
+      background: @panel_title_bg;
+      color: @text_primary;
+      border: 0;
+      border-bottom: 1px solid @panel_title_border_bottom;
+      padding: 8px 10px;
+      text-align: left;
+    }
+
+    QToolButton[dockCollapseButton="true"] {
+      background: transparent;
+      border: 0;
+      border-radius: 7px;
+    }
+
+    QToolButton[dockCollapseButton="true"]:hover {
+      background: @dock_collapse_hover_bg;
+      border: 0;
+    }
+
+
+    /* Panel tab switcher: Layers / Channels / Paths, etc. */
+
+    QDockWidget QTabBar::tab {
+      background: transparent;
+      color: @text_secondary;
+      border: 0;
+      border-radius: 7px;
+      min-height: 30px;
+      padding: 0 12px;
+      margin: 4px 2px;
+    }
+
+    QDockWidget QTabBar::tab:hover:!selected {
+      background: @tab_hover_bg;
+      color: @text_primary;
+    }
+
+    QDockWidget QTabBar::tab:selected {
+      background: @tab_selected_bg;
+      color: @text_primary;
+      border: 0;
+      font-weight: 600;
+    }
+
+
+    /* ---------- Layer/channel action bars ---------- */
+
+    QPushButton[layerActionButton="true"],
+    QToolButton[layerActionButton="true"],
+    QToolButton[channelActionButton="true"] {
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      min-width: 32px;
+      max-width: 32px;
+      min-height: 32px;
+      max-height: 32px;
+      padding: 0;
+    }
+
+    QPushButton[layerActionButton="true"]:hover,
+    QToolButton[layerActionButton="true"]:hover,
+    QToolButton[channelActionButton="true"]:hover {
+      background: @button_hover_bg;
+      border-color: transparent;
+    }
+
+
+    /* ---------- Lists / trees / tables ---------- */
+
+    QListView,
+    QListWidget,
+    QTreeView,
+    QTreeWidget,
+    QTableView,
+    QTableWidget {
+      background: @panel_bg;
+      color: @text_primary;
+      border: 0;
+      outline: 0;
+      selection-background-color: @list_selection_bg;
+      selection-color: @list_selection_text;
+    }
+
+    QListView::item,
+    QListWidget::item,
+    QTreeView::item,
+    QTreeWidget::item {
+      border-radius: 6px;
+      padding: 3px 5px;
+    }
+
+    QListView::item:hover,
+    QListWidget::item:hover,
+    QTreeView::item:hover,
+    QTreeWidget::item:hover {
+      background: @list_row_hover_bg;
+    }
+
+
+    /* ---------- Scrollbars: Adwaita-style overlay-like ---------- */
+
+    QScrollBar:vertical {
+      background: transparent;
+      width: 10px;
+      margin: 2px;
+    }
+
+    QScrollBar:horizontal {
+      background: transparent;
+      height: 10px;
+      margin: 2px;
+    }
+
+    QScrollBar::handle:vertical,
+    QScrollBar::handle:horizontal {
+      background: @scrollbar_handle_bg;
+      border: 0;
+      border-radius: 4px;
+    }
+
+    QScrollBar::handle:vertical {
+      min-height: 28px;
+    }
+
+    QScrollBar::handle:horizontal {
+      min-width: 28px;
+    }
+
+    QScrollBar::handle:hover {
+      background: @scrollbar_handle_hover_bg;
+    }
+
+    QScrollBar::sub-line,
+    QScrollBar::add-line {
+      width: 0;
+      height: 0;
+      border: 0;
+      background: transparent;
+    }
+
+    QScrollBar::add-page,
+    QScrollBar::sub-page {
+      background: transparent;
+    }
+
+
+    /* Keep canvas scrollbars larger: they are editor controls, not panel chrome. */
+
+    QScrollBar#canvasVerticalScrollBar:vertical {
+      width: 14px;
+      margin: 0;
+      background: @canvas_scrollbar_track;
+    }
+
+    QScrollBar#canvasHorizontalScrollBar:horizontal {
+      height: 14px;
+      margin: 0;
+      background: @canvas_scrollbar_track;
+    }
+
+
+    /* ---------- Status bar ---------- */
+
+    QStatusBar {
+      background: @status_bar_bg;
+      color: @status_text;
+      border: 0;
+      border-top: 1px solid @toolbar_border;
+      min-height: 26px;
+    }
+
+
+    /* ---------- Checkboxes ---------- */
+
+    QCheckBox {
+      spacing: 7px;
+      color: @text_primary;
+    }
+
+    QCheckBox::indicator {
+      width: 16px;
+      height: 16px;
+      border: 1px solid @checkbox_indicator_border;
+      border-radius: 5px;
+      background: @checkbox_indicator_bg;
+    }
+
+    QCheckBox::indicator:hover {
+      border-color: @accent;
+    }
+
+
+    /* ---------- Group boxes ---------- */
+
+    QGroupBox {
+      background: transparent;
+      border: 1px solid @panel_card_border;
+      border-radius: 10px;
+      margin-top: 14px;
+      padding: 10px;
+    }
+
+    QGroupBox::title {
+      subcontrol-origin: margin;
+      subcontrol-position: top left;
+      left: 10px;
+      padding: 0 5px;
+      color: @text_primary;
+      font-weight: 600;
+    }
+
+  )");
+}
+
+
+
+QString gnome_headerbar_style_template() {
+  return QStringLiteral(R"(
+
+    /*
+       LIENZO — GNOME / ADWAITA HEADER BAR
+    */
+
+    QToolBar#adwaitaHeaderBar {
+      background: @title_bar_bg;
+      border: 0;
+      border-bottom: 1px solid @title_bar_border;
+      min-height: 44px;
+      max-height: 44px;
+      padding: 0 8px;
+      spacing: 6px;
+    }
+
+    QWidget#adwaitaHeaderBalance,
+    QWidget#adwaitaHeaderStretch {
+      background: transparent;
+      border: 0;
+    }
+
+    QLabel#adwaitaHeaderTitle {
+      background: transparent;
+      border: 0;
+      color: @text_primary;
+      font-size: 13px;
+      font-weight: 700;
+      padding: 0 8px;
+    }
+
+    QToolButton#headerMenuButton {
+      background: transparent;
+      color: @text_primary;
+      border: 0;
+      border-radius: 7px;
+      min-width: 28px;
+      max-width: 28px;
+      min-height: 28px;
+      max-height: 28px;
+      padding: 0;
+    }
+
+    QToolButton#headerMenuButton:hover {
+      background: @button_hover_bg;
+      border: 0;
+    }
+
+    QToolButton#headerMenuButton:pressed {
+      background: @window_chrome_pressed_bg;
+      border: 0;
+    }
+
+    QToolButton#headerMenuButton::menu-indicator {
+      image: none;
+      width: 0;
+      height: 0;
+    }
+
+    /*
+       GNOME-style close button.
+       Neutral circular control, not Windows red-hover chrome.
+    */
+
+    QToolBar#adwaitaHeaderBar QToolButton#windowCloseButton {
+      background: @button_bg;
+      color: @text_primary;
+      border: 0;
+      border-radius: 14px;
+      min-width: 28px;
+      max-width: 28px;
+      min-height: 28px;
+      max-height: 28px;
+      padding: 0;
+      margin: 0;
+    }
+
+    QToolBar#adwaitaHeaderBar QToolButton#windowCloseButton:hover {
+      background: @neutral_button_hover_bg;
+      border: 0;
+    }
+
+    QToolBar#adwaitaHeaderBar QToolButton#windowCloseButton:pressed {
+      background: @window_chrome_pressed_bg;
+      border: 0;
+    }
+
+  )");
+}
+
 QString photoshop_style() {
   // Both palettes are compile-time constants, so a scheme's resolved sheet never
   // changes once built and can be cached for the process lifetime.
@@ -2193,7 +2870,7 @@ QString photoshop_style() {
   auto& cached = resolved[active_color_scheme() == ColorScheme::Light ? 1 : 0];
   if (cached.isEmpty()) {
     cached = apply_theme_tokens(
-        photoshop_style_template() + lienzo_refinement_style_template());
+        photoshop_style_template() + lienzo_refinement_style_template() + adwaita_refinement_style_template() + gnome_headerbar_style_template());
   }
   return cached;
 }
