@@ -1849,3 +1849,6 @@ if(PATCHY_BUILD_TESTS)
     add_test(NAME patchy_perf_tests COMMAND patchy_perf_tests)
   endif()
 endif()
+
+# Native Linux GNOME frontend
+include(cmake/LienzoGnome.cmake)
