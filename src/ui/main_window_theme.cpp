@@ -250,7 +250,7 @@ namespace {
 // The stylesheet with its colors still written as @role_name tokens. Every
 // color here must be a token: theme_palette.hpp owns the values, and
 // ui_theme_qss_resolves_every_token fails if a token has no matching role.
-QString photoshop_style_template() {
+QString legacy_editor_style_template() {
   return QStringLiteral(R"(
     QMainWindow, QMenuBar, QMenu, QDockWidget, QWidget {
       background: @window_bg;
@@ -2863,6 +2863,19 @@ QString gnome_headerbar_style_template() {
   )");
 }
 
+QString platform_visual_style_template() {
+#ifdef Q_OS_LINUX
+  // Linux follows GNOME/Adwaita semantics.
+  return adwaita_refinement_style_template() +
+         gnome_headerbar_style_template();
+#else
+  // Windows/macOS keep their native window chrome. Shared Lienzo
+  // refinements remain active while dedicated platform styles are built.
+  return adwaita_refinement_style_template();
+#endif
+}
+
+
 QString photoshop_style() {
   // Both palettes are compile-time constants, so a scheme's resolved sheet never
   // changes once built and can be cached for the process lifetime.
@@ -2870,7 +2883,9 @@ QString photoshop_style() {
   auto& cached = resolved[active_color_scheme() == ColorScheme::Light ? 1 : 0];
   if (cached.isEmpty()) {
     cached = apply_theme_tokens(
-        photoshop_style_template() + lienzo_refinement_style_template() + adwaita_refinement_style_template() + gnome_headerbar_style_template());
+        legacy_editor_style_template() +
+        lienzo_refinement_style_template() +
+        platform_visual_style_template());
   }
   return cached;
 }
