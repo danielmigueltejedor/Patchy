@@ -2,6 +2,7 @@
 
 #include "core/layer_metadata.hpp"
 #include "core/pixel_tools.hpp"
+#include "core/stroke_stabilizer.hpp"
 #include "render/compositor.hpp"
 
 #include <algorithm>
@@ -55,12 +56,55 @@ struct CanvasState {
 
   patchy::EditOptions edit_options{};
 
+  int brush_opacity{100};
+  int brush_flow{100};
+  int smoothing{20};
+  bool airbrush{false};
+
+  bool pointer_down{false};
+  double pointer_document_x{0.0};
+  double pointer_document_y{0.0};
+  guint airbrush_timer{0};
+
+  patchy::StrokeStabilizer stroke_stabilizer{};
+
   ~CanvasState() {
+    if (airbrush_timer != 0) {
+      g_source_remove(airbrush_timer);
+    }
+
     if (pixbuf != nullptr) {
       g_object_unref(pixbuf);
     }
   }
 };
+
+void update_brush_alpha(
+    CanvasState* state) {
+  const double opacity =
+      std::clamp(
+          state->brush_opacity,
+          1,
+          100) /
+      100.0;
+
+  const double flow =
+      std::clamp(
+          state->brush_flow,
+          1,
+          100) /
+      100.0;
+
+  state->edit_options.primary.a =
+      static_cast<std::uint8_t>(
+          std::clamp(
+              std::lround(
+                  255.0 *
+                  opacity *
+                  flow),
+              1L,
+              255L));
+}
 
 patchy::Layer* find_last_pixel_layer(
     std::vector<patchy::Layer>& layers) {
@@ -183,6 +227,66 @@ void refresh_canvas(
 
   gtk_widget_queue_draw(
       GTK_WIDGET(state->area));
+}
+
+gboolean airbrush_tick(
+    gpointer data) {
+  auto* state =
+      static_cast<CanvasState*>(data);
+
+  if (
+      !state->pointer_down ||
+      !state->airbrush ||
+      state->tool != Tool::Brush) {
+    state->airbrush_timer = 0;
+    return G_SOURCE_REMOVE;
+  }
+
+  const auto layer =
+      editing_layer(state);
+
+  if (!layer.has_value()) {
+    return G_SOURCE_CONTINUE;
+  }
+
+  (void)patchy::paint_brush_dab(
+      *state->document,
+      *layer,
+      state->pointer_document_x,
+      state->pointer_document_y,
+      state->edit_options,
+      false);
+
+  refresh_canvas(state);
+
+  return G_SOURCE_CONTINUE;
+}
+
+void start_airbrush_timer(
+    CanvasState* state) {
+  if (
+      !state->airbrush ||
+      state->airbrush_timer != 0) {
+    return;
+  }
+
+  state->airbrush_timer =
+      g_timeout_add(
+          55,
+          airbrush_tick,
+          state);
+}
+
+void stop_airbrush_timer(
+    CanvasState* state) {
+  state->pointer_down = false;
+
+  if (state->airbrush_timer != 0) {
+    g_source_remove(
+        state->airbrush_timer);
+
+    state->airbrush_timer = 0;
+  }
 }
 
 void ensure_initial_view(
@@ -842,6 +946,24 @@ void begin_smoothed_brush(
 
   state->brush_last_rendered_x = x;
   state->brush_last_rendered_y = y;
+
+  patchy::StrokeStabilizerConfig config;
+
+  config.leash_radius =
+      static_cast<double>(
+          std::clamp(
+              state->smoothing,
+              0,
+              100));
+
+  config.pulled_string = false;
+  config.catch_up = true;
+  config.catch_up_on_end = true;
+
+  state->stroke_stabilizer.begin(
+      x,
+      y,
+      config);
 }
 
 void advance_smoothed_brush(
@@ -858,6 +980,19 @@ void advance_smoothed_brush(
     return;
   }
 
+  CanvasPoint current{x, y};
+
+  if (state->smoothing > 0) {
+    const auto stable =
+        state->stroke_stabilizer.move(
+            x,
+            y);
+
+    current = {
+        stable.x,
+        stable.y};
+  }
+
   const CanvasPoint input{
       state->brush_last_input_x,
       state->brush_last_input_y};
@@ -866,14 +1001,33 @@ void advance_smoothed_brush(
       state->brush_last_rendered_x,
       state->brush_last_rendered_y};
 
-  const CanvasPoint current{
-      x,
-      y};
-
   if (
       point_distance(
           input,
           current) <= 0.01) {
+    return;
+  }
+
+  if (state->smoothing == 0) {
+    paint_brush_segment_raw(
+        state,
+        rendered,
+        current,
+        erase);
+
+    state->brush_last_input_x =
+        current.x;
+
+    state->brush_last_input_y =
+        current.y;
+
+    state->brush_last_rendered_x =
+        current.x;
+
+    state->brush_last_rendered_y =
+        current.y;
+
+    refresh_canvas(state);
     return;
   }
 
@@ -903,7 +1057,6 @@ void advance_smoothed_brush(
   state->brush_last_rendered_y =
       end.y;
 
-  // Una sola composición por evento, no una por cada subsegmento.
   refresh_canvas(state);
 }
 
@@ -916,6 +1069,19 @@ void finish_smoothed_brush(
     return;
   }
 
+  CanvasPoint end{x, y};
+
+  if (state->smoothing > 0) {
+    const auto stable =
+        state->stroke_stabilizer.finish(
+            x,
+            y);
+
+    end = {
+        stable.x,
+        stable.y};
+  }
+
   const CanvasPoint rendered{
       state->brush_last_rendered_x,
       state->brush_last_rendered_y};
@@ -924,20 +1090,24 @@ void finish_smoothed_brush(
       state->brush_last_input_x,
       state->brush_last_input_y};
 
-  const CanvasPoint end{
-      x,
-      y};
-
   if (
       point_distance(
           rendered,
           end) > 0.01) {
-    paint_quadratic_curve(
-        state,
-        rendered,
-        control,
-        end,
-        erase);
+    if (state->smoothing > 0) {
+      paint_quadratic_curve(
+          state,
+          rendered,
+          control,
+          end,
+          erase);
+    } else {
+      paint_brush_segment_raw(
+          state,
+          rendered,
+          end,
+          erase);
+    }
   }
 
   state->brush_smoothing_active = false;
@@ -973,6 +1143,42 @@ void motion_left(
       GTK_WIDGET(state->area));
 }
 
+bool commit_crop(
+    CanvasState* state) {
+  if (
+      state->tool != Tool::Crop ||
+      !state->crop_session_active ||
+      state->crop_rect.empty()) {
+    return false;
+  }
+
+  if (
+      !patchy::crop_document(
+          *state->document,
+          state->crop_rect)) {
+    return false;
+  }
+
+  state->crop_session_active = false;
+  state->view_initialized = false;
+
+  refresh_canvas(state);
+
+  return true;
+}
+
+void cancel_crop(
+    CanvasState* state) {
+  if (!state->crop_session_active) {
+    return;
+  }
+
+  state->crop_session_active = false;
+
+  gtk_widget_queue_draw(
+      GTK_WIDGET(state->area));
+}
+
 gboolean key_pressed(
     GtkEventControllerKey*,
     guint keyval,
@@ -988,25 +1194,13 @@ gboolean key_pressed(
     if (
         keyval == GDK_KEY_Return ||
         keyval == GDK_KEY_KP_Enter) {
-      if (
-          patchy::crop_document(
-              *state->document,
-              state->crop_rect)) {
-        state->crop_session_active = false;
-        state->view_initialized = false;
-
-        refresh_canvas(state);
-      }
-
-      return TRUE;
+      return commit_crop(state)
+                 ? TRUE
+                 : FALSE;
     }
 
     if (keyval == GDK_KEY_Escape) {
-      state->crop_session_active = false;
-
-      gtk_widget_queue_draw(
-          GTK_WIDGET(state->area));
-
+      cancel_crop(state);
       return TRUE;
     }
   }
@@ -1202,6 +1396,16 @@ void drag_begin(
   gtk_widget_grab_focus(
       GTK_WIDGET(state->area));
 
+  state->pointer_down = true;
+  state->pointer_document_x = dx;
+  state->pointer_document_y = dy;
+
+  if (
+      state->tool == Tool::Brush &&
+      state->airbrush) {
+    start_airbrush_timer(state);
+  }
+
   if (
       state->tool == Tool::Brush ||
       state->tool == Tool::Eraser) {
@@ -1271,6 +1475,14 @@ void drag_update(
           y,
           &new_doc_x,
           &new_doc_y);
+
+  if (new_inside) {
+    state->pointer_document_x =
+        new_doc_x;
+
+    state->pointer_document_y =
+        new_doc_y;
+  }
 
   if (old_inside && new_inside) {
     if (
@@ -1354,6 +1566,11 @@ void drag_end(
     gpointer data) {
   auto* state =
       static_cast<CanvasState*>(data);
+
+  stop_airbrush_timer(state);
+
+  gtk_widget_grab_focus(
+      GTK_WIDGET(state->area));
 
   const double end_x =
       state->drag_start_x +
@@ -1688,6 +1905,15 @@ CanvasView create_canvas_view(
 
   state->edit_options.brush_size = 24;
   state->edit_options.brush_softness = 20;
+  state->edit_options.brush_shape =
+      patchy::BrushShape::Round;
+
+  state->brush_opacity = 100;
+  state->brush_flow = 100;
+  state->smoothing = 20;
+  state->airbrush = false;
+
+  update_brush_alpha(state);
 
   rebuild_pixbuf(state);
 
@@ -1726,6 +1952,10 @@ CanvasView create_canvas_view(
 
   GtkEventController* keys =
       gtk_event_controller_key_new();
+
+  gtk_event_controller_set_propagation_phase(
+      keys,
+      GTK_PHASE_CAPTURE);
 
   g_signal_connect(
       keys,
@@ -1821,6 +2051,86 @@ CanvasView create_canvas_view(
   result.refresh =
       [state] {
         refresh_canvas(state);
+      };
+
+  result.reset_brush_options =
+      [state] {
+        state->edit_options.brush_size = 24;
+        state->edit_options.brush_softness = 20;
+        state->edit_options.brush_shape =
+            patchy::BrushShape::Round;
+
+        state->brush_opacity = 100;
+        state->brush_flow = 100;
+        state->smoothing = 20;
+        state->airbrush = false;
+
+        update_brush_alpha(state);
+
+        gtk_widget_queue_draw(
+            GTK_WIDGET(state->area));
+      };
+
+  result.set_brush_size =
+      [state](int value) {
+        state->edit_options.brush_size =
+            std::clamp(value, 1, 5000);
+
+        gtk_widget_queue_draw(
+            GTK_WIDGET(state->area));
+      };
+
+  result.set_brush_opacity =
+      [state](int value) {
+        state->brush_opacity =
+            std::clamp(value, 1, 100);
+
+        update_brush_alpha(state);
+      };
+
+  result.set_brush_softness =
+      [state](int value) {
+        state->edit_options.brush_softness =
+            std::clamp(value, 0, 100);
+      };
+
+  result.set_brush_flow =
+      [state](int value) {
+        state->brush_flow =
+            std::clamp(value, 1, 100);
+
+        update_brush_alpha(state);
+      };
+
+  result.set_airbrush =
+      [state](bool enabled) {
+        state->airbrush = enabled;
+
+        if (!enabled) {
+          stop_airbrush_timer(state);
+        }
+      };
+
+  result.set_smoothing =
+      [state](int value) {
+        state->smoothing =
+            std::clamp(value, 0, 100);
+      };
+
+  result.set_brush_shape =
+      [state](patchy::BrushShape shape) {
+        state->edit_options.brush_shape =
+            shape;
+      };
+
+  result.commit_crop =
+      [state] {
+        (void)commit_crop(state);
+      };
+
+  result.cancel_crop =
+      [state] {
+        cancel_crop(state);
       };
 
   return result;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/document.hpp"
+#include "core/pixel_tools.hpp"
 #include "ui-gnome/tool_palette.hpp"
 
 #include <gtk/gtk.h>
@@ -11,8 +12,21 @@ namespace lienzo::gnome {
 
 struct CanvasView {
   GtkWidget* widget{};
+
   std::function<void(Tool)> set_tool;
   std::function<void()> refresh;
+
+  std::function<void()> reset_brush_options;
+  std::function<void(int)> set_brush_size;
+  std::function<void(int)> set_brush_opacity;
+  std::function<void(int)> set_brush_softness;
+  std::function<void(int)> set_brush_flow;
+  std::function<void(bool)> set_airbrush;
+  std::function<void(int)> set_smoothing;
+  std::function<void(patchy::BrushShape)> set_brush_shape;
+
+  std::function<void()> commit_crop;
+  std::function<void()> cancel_crop;
 };
 
 CanvasView create_canvas_view(
