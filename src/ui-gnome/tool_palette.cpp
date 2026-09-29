@@ -4,6 +4,8 @@
 #include <string>
 #include <utility>
 
+#include <vector>
+
 namespace lienzo::gnome {
 
 namespace {
@@ -44,6 +46,179 @@ struct ToolBinding {
   Tool tool{};
   ToolSelectedCallback callback;
 };
+
+
+struct FlyoutEntry {
+  const char* name;
+  bool available;
+};
+
+std::vector<FlyoutEntry> tool_flyout_entries(
+    Tool tool) {
+  switch (tool) {
+    case Tool::Marquee:
+      return {
+          {"Marco rectangular", true},
+          {"Marco elíptico", false},
+      };
+
+    case Tool::Lasso:
+      return {
+          {"Lazo", true},
+          {"Lazo magnético", false},
+      };
+
+    case Tool::MagicWand:
+      return {
+          {"Varita mágica", false},
+          {"Selección rápida", false},
+      };
+
+    case Tool::Gradient:
+      return {
+          {"Degradado", true},
+          {"Bote de pintura", false},
+      };
+
+    case Tool::Clone:
+      return {
+          {"Tampón de clonar", false},
+          {"Tampón de motivo", false},
+      };
+
+    case Tool::Healing:
+      return {
+          {"Pincel corrector", false},
+          {"Pincel corrector puntual", false},
+          {"Parche", false},
+      };
+
+    case Tool::Smudge:
+      return {
+          {"Dedo", true},
+          {"Pincel mezclador", false},
+          {"Desenfocar", false},
+          {"Enfocar", false},
+      };
+
+    case Tool::Dodge:
+      return {
+          {"Sobreexponer", false},
+          {"Subexponer", false},
+          {"Esponja", false},
+      };
+
+    case Tool::Pen:
+      return {
+          {"Pluma", false},
+          {"Añadir punto de ancla", false},
+          {"Eliminar punto de ancla", false},
+          {"Convertir punto", false},
+      };
+
+    case Tool::PathSelect:
+      return {
+          {"Selección de trazado", false},
+          {"Selección directa", false},
+      };
+
+    case Tool::Shape:
+      return {
+          {"Línea", false},
+          {"Rectángulo", true},
+          {"Elipse", false},
+          {"Polígono", false},
+          {"Forma personalizada", false},
+      };
+
+    default:
+      return {};
+  }
+}
+
+struct FlyoutBinding {
+  GtkWidget* owner{};
+  Tool tool{};
+};
+
+void show_tool_flyout(
+    GtkGestureClick* gesture,
+    int,
+    double,
+    double,
+    gpointer data) {
+  auto* binding =
+      static_cast<FlyoutBinding*>(data);
+
+  const auto entries =
+      tool_flyout_entries(
+          binding->tool);
+
+  if (entries.empty()) {
+    return;
+  }
+
+  gtk_gesture_set_state(
+      GTK_GESTURE(gesture),
+      GTK_EVENT_SEQUENCE_CLAIMED);
+
+  GtkWidget* popover =
+      gtk_popover_new();
+
+  gtk_widget_set_parent(
+      popover,
+      binding->owner);
+
+  gtk_popover_set_autohide(
+      GTK_POPOVER(popover),
+      TRUE);
+
+  GtkWidget* box =
+      gtk_box_new(
+          GTK_ORIENTATION_VERTICAL,
+          2);
+
+  gtk_widget_set_margin_top(box, 6);
+  gtk_widget_set_margin_bottom(box, 6);
+  gtk_widget_set_margin_start(box, 6);
+  gtk_widget_set_margin_end(box, 6);
+
+  for (const auto& entry : entries) {
+    GtkWidget* row =
+        gtk_button_new_with_label(
+            entry.name);
+
+    gtk_widget_add_css_class(
+        row,
+        "flat");
+
+    gtk_widget_set_sensitive(
+        row,
+        entry.available);
+
+    gtk_widget_set_halign(
+        gtk_button_get_child(
+            GTK_BUTTON(row)),
+        GTK_ALIGN_START);
+
+    gtk_box_append(
+        GTK_BOX(box),
+        row);
+  }
+
+  gtk_popover_set_child(
+      GTK_POPOVER(popover),
+      box);
+
+  g_signal_connect_swapped(
+      popover,
+      "closed",
+      G_CALLBACK(gtk_widget_unparent),
+      popover);
+
+  gtk_popover_popup(
+      GTK_POPOVER(popover));
+}
 
 void tool_toggled(
     GtkToggleButton* button,
@@ -169,6 +344,36 @@ GtkWidget* create_tool_palette(
         button,
         38,
         38);
+
+    if (!tool_flyout_entries(
+            definition.tool).empty()) {
+      GtkGesture* secondary =
+          gtk_gesture_click_new();
+
+      gtk_gesture_single_set_button(
+          GTK_GESTURE_SINGLE(secondary),
+          GDK_BUTTON_SECONDARY);
+
+      auto* flyout_binding =
+          new FlyoutBinding{
+              button,
+              definition.tool};
+
+      g_signal_connect_data(
+          secondary,
+          "pressed",
+          G_CALLBACK(show_tool_flyout),
+          flyout_binding,
+          [](gpointer data, GClosure*) {
+            delete static_cast<FlyoutBinding*>(
+                data);
+          },
+          GConnectFlags(0));
+
+      gtk_widget_add_controller(
+          button,
+          GTK_EVENT_CONTROLLER(secondary));
+    }
 
     if (first == nullptr) {
       first =
