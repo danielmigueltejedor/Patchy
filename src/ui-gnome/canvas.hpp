@@ -27,6 +27,18 @@ struct CanvasView {
 
   std::function<void()> commit_crop;
   std::function<void()> cancel_crop;
+
+  std::function<void(std::function<void()>)>
+      set_document_changed_callback;
+
+  std::function<void()> checkpoint;
+  std::function<void()> undo;
+  std::function<void()> redo;
+  std::function<void()> copy_active;
+  std::function<void()> cut_active;
+  std::function<void()> paste;
+
+  std::function<void(int)> set_brush_tip_index;
 };
 
 CanvasView create_canvas_view(

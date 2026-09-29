@@ -179,11 +179,9 @@ void tip_changed(
       gtk_drop_down_get_selected(
           GTK_DROP_DOWN(object));
 
-  if (state->canvas.set_brush_shape) {
-    state->canvas.set_brush_shape(
-        selected == 1
-            ? patchy::BrushShape::Square
-            : patchy::BrushShape::Round);
+  if (state->canvas.set_brush_tip_index) {
+    state->canvas.set_brush_tip_index(
+        static_cast<int>(selected));
   }
 }
 
@@ -332,8 +330,16 @@ ToolOptionsBar create_tool_options_bar(
       label("Punta"));
 
   const char* tips[] = {
-      "Redonda",
+      "Redonda dura",
       "Cuadrada",
+      "Redonda suave",
+      "Lápiz",
+      "Rotulador",
+      "Caligrafía",
+      "Tiza",
+      "Carboncillo",
+      "Spray",
+      "Cerdas",
       nullptr};
 
   state->tip =

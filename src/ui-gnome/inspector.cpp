@@ -1,4 +1,6 @@
 #include "ui-gnome/inspector.hpp"
+#include "ui-gnome/layer_thumbnail.hpp"
+#include "core/adjustment_layer.hpp"
 
 #include <adwaita.h>
 
@@ -89,19 +91,23 @@ void add_layer_rows(
 
     gtk_widget_set_margin_top(
         content,
-        6);
+        3);
 
     gtk_widget_set_margin_bottom(
         content,
-        6);
+        3);
 
     gtk_widget_set_margin_start(
         content,
-        8 + depth * 14);
+        6 + depth * 12);
 
     gtk_widget_set_margin_end(
         content,
-        8);
+        6);
+
+    gtk_widget_set_valign(
+        content,
+        GTK_ALIGN_CENTER);
 
     GtkWidget* visible =
         gtk_check_button_new();
@@ -127,10 +133,10 @@ void add_layer_rows(
         GConnectFlags(0));
 
     GtkWidget* icon =
-        gtk_image_new_from_icon_name(
-            layer.kind() == patchy::LayerKind::Group
-                ? "folder-symbolic"
-                : "image-x-generic-symbolic");
+        create_layer_thumbnail(
+            layer,
+            state->document->width(),
+            state->document->height());
 
     GtkWidget* name =
         gtk_label_new(
@@ -140,9 +146,25 @@ void add_layer_rows(
         GTK_LABEL(name),
         0.0F);
 
+    gtk_label_set_ellipsize(
+        GTK_LABEL(name),
+        PANGO_ELLIPSIZE_END);
+
+    gtk_label_set_lines(
+        GTK_LABEL(name),
+        1);
+
     gtk_widget_set_hexpand(
         name,
         TRUE);
+
+    gtk_widget_set_halign(
+        name,
+        GTK_ALIGN_START);
+
+    gtk_widget_set_valign(
+        name,
+        GTK_ALIGN_CENTER);
 
     gtk_box_append(
         GTK_BOX(content),
@@ -151,6 +173,25 @@ void add_layer_rows(
     gtk_box_append(
         GTK_BOX(content),
         icon);
+
+    if (layer.mask().has_value()) {
+      GtkWidget* mask =
+          create_mask_thumbnail(
+              *layer.mask());
+
+      gtk_widget_set_tooltip_text(
+          mask,
+          "Máscara de capa");
+
+      gtk_widget_set_size_request(
+          mask,
+          24,
+          24);
+
+      gtk_box_append(
+          GTK_BOX(content),
+          mask);
+    }
 
     gtk_box_append(
         GTK_BOX(content),
@@ -350,6 +391,397 @@ void layer_selected(
   }
 }
 
+void refresh_after_layer_change(
+    InspectorState* state) {
+  rebuild_layers(state);
+  rebuild_channels(state);
+  rebuild_paths(state);
+
+  if (state->canvas.refresh) {
+    state->canvas.refresh();
+  }
+}
+
+struct RenameDialogContext {
+  InspectorState* state{};
+  GtkWidget* entry{};
+  GtkWindow* dialog{};
+  patchy::LayerId id{};
+};
+
+void apply_rename_clicked(
+    GtkButton*,
+    gpointer data) {
+  auto* context =
+      static_cast<RenameDialogContext*>(data);
+
+  auto* layer =
+      context->state->document->find_layer(
+          context->id);
+
+  if (layer != nullptr) {
+    const char* value =
+        gtk_editable_get_text(
+            GTK_EDITABLE(context->entry));
+
+    if (
+        value != nullptr &&
+        *value != 0) {
+      layer->set_name(value);
+
+      refresh_after_layer_change(
+          context->state);
+    }
+  }
+
+  gtk_window_destroy(
+      context->dialog);
+}
+
+void destroy_rename_context(
+    gpointer data,
+    GClosure*) {
+  delete static_cast<RenameDialogContext*>(
+      data);
+}
+
+void rename_layer_clicked(
+    GtkButton*,
+    gpointer data) {
+  auto* state =
+      static_cast<InspectorState*>(data);
+
+  const auto active =
+      state->document->active_layer_id();
+
+  if (!active.has_value()) {
+    return;
+  }
+
+  auto* layer =
+      state->document->find_layer(
+          *active);
+
+  if (layer == nullptr) {
+    return;
+  }
+
+  GtkWidget* dialog =
+      gtk_window_new();
+
+  gtk_window_set_title(
+      GTK_WINDOW(dialog),
+      "Cambiar nombre");
+
+  gtk_window_set_transient_for(
+      GTK_WINDOW(dialog),
+      GTK_WINDOW(
+          gtk_widget_get_root(
+              GTK_WIDGET(state->layers))));
+
+  gtk_window_set_modal(
+      GTK_WINDOW(dialog),
+      TRUE);
+
+  GtkWidget* box =
+      gtk_box_new(
+          GTK_ORIENTATION_VERTICAL,
+          12);
+
+  gtk_widget_set_margin_top(box, 16);
+  gtk_widget_set_margin_bottom(box, 16);
+  gtk_widget_set_margin_start(box, 16);
+  gtk_widget_set_margin_end(box, 16);
+
+  GtkWidget* entry =
+      gtk_entry_new();
+
+  gtk_editable_set_text(
+      GTK_EDITABLE(entry),
+      layer->name().c_str());
+
+  gtk_editable_select_region(
+      GTK_EDITABLE(entry),
+      0,
+      -1);
+
+  GtkWidget* buttons =
+      gtk_box_new(
+          GTK_ORIENTATION_HORIZONTAL,
+          6);
+
+  gtk_widget_set_halign(
+      buttons,
+      GTK_ALIGN_END);
+
+  GtkWidget* cancel =
+      gtk_button_new_with_label(
+          "Cancelar");
+
+  GtkWidget* apply =
+      gtk_button_new_with_label(
+          "Cambiar nombre");
+
+  gtk_widget_add_css_class(
+      apply,
+      "suggested-action");
+
+  gtk_box_append(
+      GTK_BOX(buttons),
+      cancel);
+
+  gtk_box_append(
+      GTK_BOX(buttons),
+      apply);
+
+  gtk_box_append(
+      GTK_BOX(box),
+      entry);
+
+  gtk_box_append(
+      GTK_BOX(box),
+      buttons);
+
+  gtk_window_set_child(
+      GTK_WINDOW(dialog),
+      box);
+
+  g_signal_connect_swapped(
+      cancel,
+      "clicked",
+      G_CALLBACK(gtk_window_destroy),
+      dialog);
+
+  auto* rename_context =
+      new RenameDialogContext{
+          state,
+          entry,
+          GTK_WINDOW(dialog),
+          *active};
+
+  g_signal_connect_data(
+      apply,
+      "clicked",
+      G_CALLBACK(apply_rename_clicked),
+      rename_context,
+      destroy_rename_context,
+      GConnectFlags(0));
+
+  gtk_window_present(
+      GTK_WINDOW(dialog));
+}
+
+void add_group_clicked(
+    GtkButton*,
+    gpointer data) {
+  auto* state =
+      static_cast<InspectorState*>(data);
+
+  auto& document =
+      *state->document;
+
+  patchy::Layer group(
+      document.allocate_layer_id(),
+      "Carpeta",
+      patchy::LayerKind::Group);
+
+  group.set_blend_mode(
+      patchy::BlendMode::PassThrough);
+
+  document.add_layer(
+      std::move(group));
+
+  refresh_after_layer_change(state);
+}
+
+void add_mask_clicked(
+    GtkButton*,
+    gpointer data) {
+  auto* state =
+      static_cast<InspectorState*>(data);
+
+  const auto active =
+      state->document->active_layer_id();
+
+  if (!active.has_value()) {
+    return;
+  }
+
+  auto* layer =
+      state->document->find_layer(
+          *active);
+
+  if (
+      layer == nullptr ||
+      layer->mask().has_value()) {
+    return;
+  }
+
+  if (
+      layer->kind() != patchy::LayerKind::Pixel &&
+      layer->kind() != patchy::LayerKind::Adjustment &&
+      layer->kind() != patchy::LayerKind::Group) {
+    return;
+  }
+
+  patchy::PixelBuffer pixels(
+      state->document->width(),
+      state->document->height(),
+      patchy::PixelFormat::gray8());
+
+  pixels.clear(255);
+
+  layer->set_mask(
+      patchy::LayerMask{
+          patchy::Rect{
+              0,
+              0,
+              state->document->width(),
+              state->document->height()},
+          std::move(pixels),
+          255,
+          false});
+
+  refresh_after_layer_change(state);
+}
+
+void add_adjustment(
+    InspectorState* state,
+    patchy::AdjustmentKind kind) {
+  auto& document =
+      *state->document;
+
+  patchy::AdjustmentSettings settings;
+
+  settings.kind = kind;
+
+  patchy::Layer layer(
+      document.allocate_layer_id(),
+      patchy::adjustment_display_name(kind),
+      patchy::LayerKind::Adjustment);
+
+  patchy::configure_adjustment_layer(
+      layer,
+      settings);
+
+  document.add_layer(
+      std::move(layer));
+
+  refresh_after_layer_change(state);
+}
+
+void adjustment_selected(
+    GtkButton* button,
+    gpointer data) {
+  auto* state =
+      static_cast<InspectorState*>(data);
+
+  const auto kind =
+      GPOINTER_TO_INT(
+          g_object_get_data(
+              G_OBJECT(button),
+              "adjustment-kind"));
+
+  add_adjustment(
+      state,
+      static_cast<patchy::AdjustmentKind>(
+          kind));
+
+  GtkWidget* popover =
+      gtk_widget_get_ancestor(
+          GTK_WIDGET(button),
+          GTK_TYPE_POPOVER);
+
+  if (popover != nullptr) {
+    gtk_popover_popdown(
+        GTK_POPOVER(popover));
+  }
+}
+
+void show_adjustment_menu(
+    GtkButton* button,
+    gpointer data) {
+  auto* state =
+      static_cast<InspectorState*>(data);
+
+  GtkWidget* popover =
+      gtk_popover_new();
+
+  gtk_widget_set_parent(
+      popover,
+      GTK_WIDGET(button));
+
+  gtk_popover_set_position(
+      GTK_POPOVER(popover),
+      GTK_POS_TOP);
+
+  GtkWidget* box =
+      gtk_box_new(
+          GTK_ORIENTATION_VERTICAL,
+          2);
+
+  gtk_widget_set_margin_top(box, 6);
+  gtk_widget_set_margin_bottom(box, 6);
+  gtk_widget_set_margin_start(box, 6);
+  gtk_widget_set_margin_end(box, 6);
+
+  struct Entry {
+    const char* name;
+    patchy::AdjustmentKind kind;
+  };
+
+  constexpr Entry entries[] = {
+      {"Niveles", patchy::AdjustmentKind::Levels},
+      {"Curvas", patchy::AdjustmentKind::Curves},
+      {"Tono/Saturación", patchy::AdjustmentKind::HueSaturation},
+      {"Equilibrio de color", patchy::AdjustmentKind::ColorBalance},
+      {"Invertir", patchy::AdjustmentKind::Invert},
+      {"Posterizar", patchy::AdjustmentKind::Posterize},
+      {"Umbral", patchy::AdjustmentKind::Threshold},
+      {"Brillo/Contraste", patchy::AdjustmentKind::BrightnessContrast},
+  };
+
+  for (const auto& entry : entries) {
+    GtkWidget* row =
+        gtk_button_new_with_label(
+            entry.name);
+
+    gtk_widget_add_css_class(
+        row,
+        "flat");
+
+    g_object_set_data(
+        G_OBJECT(row),
+        "adjustment-kind",
+        GINT_TO_POINTER(
+            static_cast<int>(
+                entry.kind)));
+
+    g_signal_connect(
+        row,
+        "clicked",
+        G_CALLBACK(adjustment_selected),
+        state);
+
+    gtk_box_append(
+        GTK_BOX(box),
+        row);
+  }
+
+  gtk_popover_set_child(
+      GTK_POPOVER(popover),
+      box);
+
+  g_signal_connect_swapped(
+      popover,
+      "closed",
+      G_CALLBACK(gtk_widget_unparent),
+      popover);
+
+  gtk_popover_popup(
+      GTK_POPOVER(popover));
+}
+
 void add_layer_clicked(
     GtkButton*,
     gpointer data) {
@@ -424,7 +856,7 @@ GtkWidget* create_inspector(
 
   gtk_widget_set_size_request(
       root,
-      280,
+      292,
       -1);
 
   GtkWidget* stack =
@@ -447,11 +879,11 @@ GtkWidget* create_inspector(
 
   gtk_widget_set_margin_top(
       switcher,
-      6);
+      4);
 
   gtk_widget_set_margin_bottom(
       switcher,
-      6);
+      4);
 
   state->layers =
       GTK_LIST_BOX(
@@ -494,19 +926,51 @@ GtkWidget* create_inspector(
 
   gtk_widget_set_margin_top(
       layer_actions,
-      6);
+      4);
 
   gtk_widget_set_margin_bottom(
       layer_actions,
-      6);
+      4);
 
   gtk_widget_set_margin_start(
       layer_actions,
-      6);
+      4);
 
   gtk_widget_set_margin_end(
       layer_actions,
-      6);
+      4);
+
+  GtkWidget* rename =
+      gtk_button_new_from_icon_name(
+          "document-edit-symbolic");
+
+  gtk_widget_set_tooltip_text(
+      rename,
+      "Cambiar nombre");
+
+  GtkWidget* folder =
+      gtk_button_new_from_icon_name(
+          "folder-new-symbolic");
+
+  gtk_widget_set_tooltip_text(
+      folder,
+      "Nueva carpeta de capas");
+
+  GtkWidget* adjustment =
+      gtk_button_new_from_icon_name(
+          "image-adjust-color-symbolic");
+
+  gtk_widget_set_tooltip_text(
+      adjustment,
+      "Nueva capa de ajuste");
+
+  GtkWidget* mask =
+      gtk_button_new_from_icon_name(
+          "view-reveal-symbolic");
+
+  gtk_widget_set_tooltip_text(
+      mask,
+      "Añadir máscara de capa");
 
   GtkWidget* add =
       gtk_button_new_from_icon_name(
@@ -524,9 +988,55 @@ GtkWidget* create_inspector(
       remove,
       "Eliminar capa");
 
+  for (GtkWidget* button : {
+           rename,
+           folder,
+           adjustment,
+           mask,
+           add,
+           remove}) {
+    gtk_widget_add_css_class(
+        button,
+        "flat");
+
+    gtk_widget_set_size_request(
+        button,
+        28,
+        28);
+  }
+
+  gtk_box_append(
+      GTK_BOX(layer_actions),
+      rename);
+
+  gtk_box_append(
+      GTK_BOX(layer_actions),
+      folder);
+
+  gtk_box_append(
+      GTK_BOX(layer_actions),
+      adjustment);
+
+  gtk_box_append(
+      GTK_BOX(layer_actions),
+      mask);
+
   gtk_box_append(
       GTK_BOX(layer_actions),
       add);
+
+  GtkWidget* spacer =
+      gtk_box_new(
+          GTK_ORIENTATION_HORIZONTAL,
+          0);
+
+  gtk_widget_set_hexpand(
+      spacer,
+      TRUE);
+
+  gtk_box_append(
+      GTK_BOX(layer_actions),
+      spacer);
 
   gtk_box_append(
       GTK_BOX(layer_actions),
@@ -566,6 +1076,167 @@ GtkWidget* create_inspector(
       GTK_SCROLLED_WINDOW(paths_scroll),
       GTK_WIDGET(state->paths));
 
+  GtkWidget* history_page =
+      gtk_list_box_new();
+
+  GtkWidget* history_initial =
+      gtk_label_new(
+          "Documento abierto");
+
+  gtk_widget_set_margin_top(
+      history_initial,
+      10);
+
+  gtk_widget_set_margin_bottom(
+      history_initial,
+      10);
+
+  gtk_list_box_append(
+      GTK_LIST_BOX(history_page),
+      history_initial);
+
+  GtkWidget* properties_page =
+      adw_preferences_group_new();
+
+  adw_preferences_group_set_title(
+      ADW_PREFERENCES_GROUP(properties_page),
+      "Propiedades de la capa activa");
+
+  GtkWidget* opacity =
+      adw_spin_row_new_with_range(
+          0,
+          100,
+          1);
+
+  adw_preferences_row_set_title(
+      ADW_PREFERENCES_ROW(opacity),
+      "Opacidad");
+
+  adw_preferences_group_add(
+      ADW_PREFERENCES_GROUP(properties_page),
+      opacity);
+
+  GtkWidget* fill_opacity =
+      adw_spin_row_new_with_range(
+          0,
+          100,
+          1);
+
+  adw_preferences_row_set_title(
+      ADW_PREFERENCES_ROW(fill_opacity),
+      "Opacidad de relleno");
+
+  adw_preferences_group_add(
+      ADW_PREFERENCES_GROUP(properties_page),
+      fill_opacity);
+
+  GtkWidget* info_page =
+      gtk_box_new(
+          GTK_ORIENTATION_VERTICAL,
+          8);
+
+  gtk_widget_set_margin_top(
+      info_page,
+      12);
+
+  gtk_widget_set_margin_start(
+      info_page,
+      12);
+
+  char info[256];
+
+  g_snprintf(
+      info,
+      sizeof(info),
+      "%d × %d px\n%.0f ppp\n%zu capas\n%zu canales\n%zu trazados",
+      document.width(),
+      document.height(),
+      document.print_settings().horizontal_ppi,
+      document.layers().size(),
+      document.channels().size(),
+      document.paths().size());
+
+  GtkWidget* info_label =
+      gtk_label_new(info);
+
+  gtk_label_set_xalign(
+      GTK_LABEL(info_label),
+      0.0F);
+
+  gtk_box_append(
+      GTK_BOX(info_page),
+      info_label);
+
+  GtkWidget* palette_page =
+      gtk_flow_box_new();
+
+  gtk_flow_box_set_selection_mode(
+      GTK_FLOW_BOX(palette_page),
+      GTK_SELECTION_NONE);
+
+  const auto add_palette =
+      [palette_page](const auto& colors) {
+        for (const auto& color : colors) {
+          GtkWidget* swatch =
+              gtk_drawing_area_new();
+
+          gtk_widget_set_size_request(
+              swatch,
+              32,
+              32);
+
+          auto* stored =
+              new patchy::RgbColor(color);
+
+          gtk_drawing_area_set_draw_func(
+              GTK_DRAWING_AREA(swatch),
+              [](
+                  GtkDrawingArea*,
+                  cairo_t* cr,
+                  int width,
+                  int height,
+                  gpointer data) {
+                const auto* color =
+                    static_cast<
+                        patchy::RgbColor*>(
+                            data);
+
+                cairo_set_source_rgb(
+                    cr,
+                    color->red / 255.0,
+                    color->green / 255.0,
+                    color->blue / 255.0);
+
+                cairo_rectangle(
+                    cr,
+                    0,
+                    0,
+                    width,
+                    height);
+
+                cairo_fill(cr);
+              },
+              stored,
+              [](gpointer data) {
+                delete static_cast<
+                    patchy::RgbColor*>(
+                        data);
+              });
+
+          gtk_flow_box_append(
+              GTK_FLOW_BOX(palette_page),
+              swatch);
+        }
+      };
+
+  if (document.palette_editing().has_value()) {
+    add_palette(
+        document.palette_editing()->palette.colors);
+  } else if (document.indexed_palette().has_value()) {
+    add_palette(
+        document.indexed_palette()->colors);
+  }
+
   gtk_stack_add_titled(
       GTK_STACK(stack),
       layers_page,
@@ -584,6 +1255,7 @@ GtkWidget* create_inspector(
       "paths",
       "Trazados");
 
+
   gtk_box_append(
       GTK_BOX(root),
       switcher);
@@ -593,9 +1265,77 @@ GtkWidget* create_inspector(
       gtk_separator_new(
           GTK_ORIENTATION_HORIZONTAL));
 
+  gtk_widget_set_vexpand(
+      stack,
+      TRUE);
+
   gtk_box_append(
       GTK_BOX(root),
       stack);
+
+  const auto add_collapsible_panel =
+      [root](
+          const char* title,
+          GtkWidget* child) {
+        GtkWidget* expander =
+            gtk_expander_new(title);
+
+        gtk_expander_set_child(
+            GTK_EXPANDER(expander),
+            child);
+
+        gtk_expander_set_expanded(
+            GTK_EXPANDER(expander),
+            FALSE);
+
+        gtk_widget_add_css_class(
+            expander,
+            "lienzo-inspector-section");
+
+        gtk_box_append(
+            GTK_BOX(root),
+            expander);
+      };
+
+  add_collapsible_panel(
+      "Historia",
+      history_page);
+
+  add_collapsible_panel(
+      "Propiedades",
+      properties_page);
+
+  add_collapsible_panel(
+      "Información",
+      info_page);
+
+  add_collapsible_panel(
+      "Paleta",
+      palette_page);
+
+  g_signal_connect(
+      rename,
+      "clicked",
+      G_CALLBACK(rename_layer_clicked),
+      state);
+
+  g_signal_connect(
+      folder,
+      "clicked",
+      G_CALLBACK(add_group_clicked),
+      state);
+
+  g_signal_connect(
+      adjustment,
+      "clicked",
+      G_CALLBACK(show_adjustment_menu),
+      state);
+
+  g_signal_connect(
+      mask,
+      "clicked",
+      G_CALLBACK(add_mask_clicked),
+      state);
 
   g_signal_connect(
       add,
@@ -623,6 +1363,27 @@ GtkWidget* create_inspector(
   rebuild_paths(state);
 
   return root;
+}
+
+void refresh_inspector(
+    GtkWidget* inspector) {
+  if (inspector == nullptr) {
+    return;
+  }
+
+  auto* state =
+      static_cast<InspectorState*>(
+          g_object_get_data(
+              G_OBJECT(inspector),
+              "lienzo-inspector-state"));
+
+  if (state == nullptr) {
+    return;
+  }
+
+  rebuild_layers(state);
+  rebuild_channels(state);
+  rebuild_paths(state);
 }
 
 }  // namespace lienzo::gnome

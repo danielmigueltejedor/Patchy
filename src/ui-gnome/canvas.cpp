@@ -1,4 +1,5 @@
 #include "ui-gnome/canvas.hpp"
+#include "ui-gnome/brush_tips.hpp"
 
 #include "core/layer_metadata.hpp"
 #include "core/pixel_tools.hpp"
@@ -9,6 +10,7 @@
 #include <cmath>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace lienzo::gnome {
@@ -68,6 +70,32 @@ struct CanvasState {
 
   patchy::StrokeStabilizer stroke_stabilizer{};
 
+  std::function<void()>
+      document_changed_callback;
+
+  std::vector<patchy::Document>
+      undo_stack;
+
+  std::vector<patchy::Document>
+      redo_stack;
+
+  struct ClipboardLayer {
+    patchy::PixelBuffer pixels;
+    patchy::Rect bounds{};
+    std::string name;
+  };
+
+  std::optional<ClipboardLayer>
+      clipboard;
+
+  int brush_tip_index{0};
+
+  patchy::BrushTipMipChain
+      brush_tip_mips;
+
+  patchy::ScaledBrushTip
+      scaled_brush_tip;
+
   ~CanvasState() {
     if (airbrush_timer != 0) {
       g_source_remove(airbrush_timer);
@@ -78,6 +106,60 @@ struct CanvasState {
     }
   }
 };
+
+void apply_brush_tip(
+    CanvasState* state,
+    int index) {
+  const auto& tips =
+      builtin_brush_tips();
+
+  if (tips.empty()) {
+    return;
+  }
+
+  index =
+      std::clamp(
+          index,
+          0,
+          static_cast<int>(
+              tips.size() - 1));
+
+  state->brush_tip_index =
+      index;
+
+  const auto& preset =
+      tips[
+          static_cast<std::size_t>(
+              index)];
+
+  if (preset.procedural) {
+    state->edit_options.brush_tip =
+        nullptr;
+
+    state->edit_options.brush_shape =
+        preset.procedural_shape;
+
+    state->edit_options.brush_tip_spacing =
+        0.25;
+
+    return;
+  }
+
+  state->brush_tip_mips =
+      patchy::build_brush_tip_mips(
+          preset.tip);
+
+  state->scaled_brush_tip =
+      patchy::make_scaled_brush_tip(
+          state->brush_tip_mips,
+          state->edit_options.brush_size);
+
+  state->edit_options.brush_tip =
+      &state->scaled_brush_tip;
+
+  state->edit_options.brush_tip_spacing =
+      preset.tip.default_spacing;
+}
 
 void update_brush_alpha(
     CanvasState* state) {
@@ -228,6 +310,153 @@ void refresh_canvas(
   gtk_widget_queue_draw(
       GTK_WIDGET(state->area));
 }
+
+
+void notify_document_changed(
+    CanvasState* state) {
+  if (state->document_changed_callback) {
+    state->document_changed_callback();
+  }
+}
+
+void push_history(
+    CanvasState* state) {
+  state->undo_stack.push_back(
+      *state->document);
+
+  constexpr std::size_t kMaxHistory = 32;
+
+  if (
+      state->undo_stack.size() >
+      kMaxHistory) {
+    state->undo_stack.erase(
+        state->undo_stack.begin());
+  }
+
+  state->redo_stack.clear();
+}
+
+void undo_document(
+    CanvasState* state) {
+  if (state->undo_stack.empty()) {
+    return;
+  }
+
+  state->redo_stack.push_back(
+      *state->document);
+
+  *state->document =
+      std::move(
+          state->undo_stack.back());
+
+  state->undo_stack.pop_back();
+
+  state->view_initialized = false;
+
+  refresh_canvas(state);
+  notify_document_changed(state);
+}
+
+void redo_document(
+    CanvasState* state) {
+  if (state->redo_stack.empty()) {
+    return;
+  }
+
+  state->undo_stack.push_back(
+      *state->document);
+
+  *state->document =
+      std::move(
+          state->redo_stack.back());
+
+  state->redo_stack.pop_back();
+
+  state->view_initialized = false;
+
+  refresh_canvas(state);
+  notify_document_changed(state);
+}
+
+void copy_active_layer(
+    CanvasState* state) {
+  const auto active =
+      state->document->active_layer_id();
+
+  if (!active.has_value()) {
+    return;
+  }
+
+  const auto* layer =
+      state->document->find_layer(
+          *active);
+
+  if (
+      layer == nullptr ||
+      layer->kind() !=
+          patchy::LayerKind::Pixel ||
+      layer->pixels().empty()) {
+    return;
+  }
+
+  state->clipboard =
+      CanvasState::ClipboardLayer{
+          layer->pixels(),
+          layer->bounds(),
+          layer->name()};
+}
+
+void cut_active_layer(
+    CanvasState* state) {
+  const auto active =
+      state->document->active_layer_id();
+
+  if (!active.has_value()) {
+    return;
+  }
+
+  copy_active_layer(state);
+
+  if (!state->clipboard.has_value()) {
+    return;
+  }
+
+  push_history(state);
+
+  if (
+      state->document->remove_layer(
+          *active)) {
+    refresh_canvas(state);
+    notify_document_changed(state);
+  }
+}
+
+void paste_layer(
+    CanvasState* state) {
+  if (!state->clipboard.has_value()) {
+    return;
+  }
+
+  push_history(state);
+
+  const auto& copied =
+      *state->clipboard;
+
+  patchy::Layer layer(
+      state->document->allocate_layer_id(),
+      copied.name + " copy",
+      copied.pixels);
+
+  layer.set_bounds(
+      copied.bounds);
+
+  state->document->add_layer(
+      std::move(layer));
+
+  refresh_canvas(state);
+  notify_document_changed(state);
+}
+
 
 gboolean airbrush_tick(
     gpointer data) {
@@ -1152,6 +1381,8 @@ bool commit_crop(
     return false;
   }
 
+  push_history(state);
+
   if (
       !patchy::crop_document(
           *state->document,
@@ -1163,6 +1394,7 @@ bool commit_crop(
   state->view_initialized = false;
 
   refresh_canvas(state);
+  notify_document_changed(state);
 
   return true;
 }
@@ -1396,6 +1628,14 @@ void drag_begin(
   gtk_widget_grab_focus(
       GTK_WIDGET(state->area));
 
+  if (
+      state->tool == Tool::Brush ||
+      state->tool == Tool::Eraser ||
+      state->tool == Tool::Smudge ||
+      state->tool == Tool::Move) {
+    push_history(state);
+  }
+
   state->pointer_down = true;
   state->pointer_document_x = dx;
   state->pointer_document_y = dy;
@@ -1610,6 +1850,8 @@ void drag_end(
         y1,
         state->tool == Tool::Eraser);
 
+    notify_document_changed(state);
+
     return;
   }
 
@@ -1628,6 +1870,7 @@ void drag_end(
           state->edit_options);
 
       refresh_canvas(state);
+      notify_document_changed(state);
     }
 
     return;
@@ -1657,6 +1900,7 @@ void drag_end(
           false);
 
       refresh_canvas(state);
+      notify_document_changed(state);
     }
 
     return;
@@ -1915,6 +2159,10 @@ CanvasView create_canvas_view(
 
   update_brush_alpha(state);
 
+  apply_brush_tip(
+      state,
+      0);
+
   rebuild_pixbuf(state);
 
   g_object_set_data_full(
@@ -2076,6 +2324,10 @@ CanvasView create_canvas_view(
         state->edit_options.brush_size =
             std::clamp(value, 1, 5000);
 
+        apply_brush_tip(
+            state,
+            state->brush_tip_index);
+
         gtk_widget_queue_draw(
             GTK_WIDGET(state->area));
       };
@@ -2131,6 +2383,52 @@ CanvasView create_canvas_view(
   result.cancel_crop =
       [state] {
         cancel_crop(state);
+      };
+
+  result.set_document_changed_callback =
+      [state](std::function<void()> callback) {
+        state->document_changed_callback =
+            std::move(callback);
+      };
+
+  result.checkpoint =
+      [state] {
+        push_history(state);
+      };
+
+  result.undo =
+      [state] {
+        undo_document(state);
+      };
+
+  result.redo =
+      [state] {
+        redo_document(state);
+      };
+
+  result.copy_active =
+      [state] {
+        copy_active_layer(state);
+      };
+
+  result.cut_active =
+      [state] {
+        cut_active_layer(state);
+      };
+
+  result.paste =
+      [state] {
+        paste_layer(state);
+      };
+
+  result.set_brush_tip_index =
+      [state](int index) {
+        apply_brush_tip(
+            state,
+            index);
+
+        gtk_widget_queue_draw(
+            GTK_WIDGET(state->area));
       };
 
   return result;

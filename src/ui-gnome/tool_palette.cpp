@@ -136,42 +136,44 @@ std::vector<FlyoutEntry> tool_flyout_entries(
   }
 }
 
-struct FlyoutBinding {
-  GtkWidget* owner{};
-  Tool tool{};
-};
-
-void show_tool_flyout(
-    GtkGestureClick* gesture,
-    int,
-    double,
-    double,
-    gpointer data) {
-  auto* binding =
-      static_cast<FlyoutBinding*>(data);
-
+void present_tool_flyout(
+    GtkWidget* owner,
+    Tool tool) {
   const auto entries =
-      tool_flyout_entries(
-          binding->tool);
+      tool_flyout_entries(tool);
 
   if (entries.empty()) {
     return;
   }
-
-  gtk_gesture_set_state(
-      GTK_GESTURE(gesture),
-      GTK_EVENT_SEQUENCE_CLAIMED);
 
   GtkWidget* popover =
       gtk_popover_new();
 
   gtk_widget_set_parent(
       popover,
-      binding->owner);
+      owner);
 
   gtk_popover_set_autohide(
       GTK_POPOVER(popover),
       TRUE);
+
+  gtk_popover_set_has_arrow(
+      GTK_POPOVER(popover),
+      TRUE);
+
+  gtk_popover_set_position(
+      GTK_POPOVER(popover),
+      GTK_POS_RIGHT);
+
+  GdkRectangle pointing{
+      gtk_widget_get_width(owner) - 1,
+      0,
+      1,
+      gtk_widget_get_height(owner)};
+
+  gtk_popover_set_pointing_to(
+      GTK_POPOVER(popover),
+      &pointing);
 
   GtkWidget* box =
       gtk_box_new(
@@ -196,10 +198,15 @@ void show_tool_flyout(
         row,
         entry.available);
 
-    gtk_widget_set_halign(
+    GtkWidget* child =
         gtk_button_get_child(
-            GTK_BUTTON(row)),
-        GTK_ALIGN_START);
+            GTK_BUTTON(row));
+
+    if (child != nullptr) {
+      gtk_widget_set_halign(
+          child,
+          GTK_ALIGN_START);
+    }
 
     gtk_box_append(
         GTK_BOX(box),
@@ -218,6 +225,54 @@ void show_tool_flyout(
 
   gtk_popover_popup(
       GTK_POPOVER(popover));
+}
+
+void palette_secondary_pressed(
+    GtkGestureClick* gesture,
+    int,
+    double x,
+    double y,
+    gpointer data) {
+  GtkWidget* palette =
+      GTK_WIDGET(data);
+
+  GtkWidget* picked =
+      gtk_widget_pick(
+          palette,
+          x,
+          y,
+          static_cast<GtkPickFlags>(
+              GTK_PICK_INSENSITIVE |
+              GTK_PICK_NON_TARGETABLE));
+
+  while (
+      picked != nullptr &&
+      picked != palette) {
+    gpointer raw =
+        g_object_get_data(
+            G_OBJECT(picked),
+            "lienzo-tool-id");
+
+    if (raw != nullptr) {
+      gtk_gesture_set_state(
+          GTK_GESTURE(gesture),
+          GTK_EVENT_SEQUENCE_CLAIMED);
+
+      const auto tool =
+          static_cast<Tool>(
+              GPOINTER_TO_INT(raw) - 1);
+
+      present_tool_flyout(
+          picked,
+          tool);
+
+      return;
+    }
+
+    picked =
+        gtk_widget_get_parent(
+            picked);
+  }
 }
 
 void tool_toggled(
@@ -293,6 +348,31 @@ GtkWidget* create_tool_palette(
       palette,
       4);
 
+  GtkGesture* secondary =
+      gtk_gesture_click_new();
+
+  gtk_gesture_single_set_button(
+      GTK_GESTURE_SINGLE(secondary),
+      GDK_BUTTON_SECONDARY);
+
+  gtk_gesture_single_set_exclusive(
+      GTK_GESTURE_SINGLE(secondary),
+      TRUE);
+
+  gtk_event_controller_set_propagation_phase(
+      GTK_EVENT_CONTROLLER(secondary),
+      GTK_PHASE_CAPTURE);
+
+  g_signal_connect(
+      secondary,
+      "pressed",
+      G_CALLBACK(palette_secondary_pressed),
+      palette);
+
+  gtk_widget_add_controller(
+      palette,
+      GTK_EVENT_CONTROLLER(secondary));
+
   GtkToggleButton* first = nullptr;
 
   int index = 0;
@@ -345,35 +425,12 @@ GtkWidget* create_tool_palette(
         38,
         38);
 
-    if (!tool_flyout_entries(
-            definition.tool).empty()) {
-      GtkGesture* secondary =
-          gtk_gesture_click_new();
-
-      gtk_gesture_single_set_button(
-          GTK_GESTURE_SINGLE(secondary),
-          GDK_BUTTON_SECONDARY);
-
-      auto* flyout_binding =
-          new FlyoutBinding{
-              button,
-              definition.tool};
-
-      g_signal_connect_data(
-          secondary,
-          "pressed",
-          G_CALLBACK(show_tool_flyout),
-          flyout_binding,
-          [](gpointer data, GClosure*) {
-            delete static_cast<FlyoutBinding*>(
-                data);
-          },
-          GConnectFlags(0));
-
-      gtk_widget_add_controller(
-          button,
-          GTK_EVENT_CONTROLLER(secondary));
-    }
+    g_object_set_data(
+        G_OBJECT(button),
+        "lienzo-tool-id",
+        GINT_TO_POINTER(
+            static_cast<int>(
+                definition.tool) + 1));
 
     if (first == nullptr) {
       first =

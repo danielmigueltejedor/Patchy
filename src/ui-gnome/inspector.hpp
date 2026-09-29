@@ -11,4 +11,7 @@ GtkWidget* create_inspector(
     patchy::Document& document,
     const CanvasView& canvas);
 
+void refresh_inspector(
+    GtkWidget* inspector);
+
 }
