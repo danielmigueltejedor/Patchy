@@ -1,0 +1,288 @@
+name: Weekly Patchy upstream sync
+
+on:
+  schedule:
+    - cron: "30 4 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: weekly-patchy-sync
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_URL: https://github.com/SethRobinson/Patchy.git
+  UPSTREAM_BRANCH: main
+  SYNC_BRANCH: automation/patchy-sync
+  QT_VERSION: 6.8.3
+  MAX_COMMITS_PER_RUN: "25"
+
+jobs:
+  sync:
+    name: Validate and import safe Patchy commits
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    steps:
+      - name: Check out Lienzo main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Configure Git identity
+        run: |
+          git config user.name "Lienzo upstream sync"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch Patchy as a read-only source
+        run: |
+          git remote remove patchy-source 2>/dev/null || true
+          git remote add patchy-source "$UPSTREAM_URL"
+          git fetch --no-tags patchy-source "$UPSTREAM_BRANCH"
+          git checkout -B "$SYNC_BRANCH" main
+
+      - name: Discover commits not already present in Lienzo
+        id: discover
+        shell: bash
+        run: |
+          set -euo pipefail
+          git cherry main "patchy-source/$UPSTREAM_BRANCH" |
+            awk '$1 == "+" { print $2 }' > /tmp/patchy-candidates.txt
+
+          count="$(wc -l < /tmp/patchy-candidates.txt | tr -d " ")"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "Unique Patchy commits detected: $count" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$count" -gt "$MAX_COMMITS_PER_RUN" ]; then
+            echo "Too many upstream commits ($count > $MAX_COMMITS_PER_RUN)." >&2
+            exit 2
+          fi
+
+      - name: Classify and cherry-pick auto-safe commits
+        if: steps.discover.outputs.count != '0'
+        id: apply
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          : > /tmp/patchy-accepted.txt
+          : > /tmp/patchy-manual.txt
+          : > /tmp/patchy-conflicts.txt
+
+          protected_re='^(.github/|README\.md$|AGENTS\.md$|LICENSE$|NOTICE-THIRD-PARTY\.md$|latest_version\.json$|packaging/|scripts/release/|scripts/remote/|docs/release-process\.md$)'
+
+          while read -r sha; do
+            [ -n "$sha" ] || continue
+
+            subject="$(git show -s --format=%s "$sha")"
+            files="$(git diff-tree --no-commit-id --name-only -r "$sha")"
+
+            if printf '%s\n' "$files" | grep -Eq "$protected_re"; then
+              printf '%s %s\n' "$sha" "$subject" >> /tmp/patchy-manual.txt
+              continue
+            fi
+
+            before="$(git rev-parse HEAD)"
+
+            if ! git cherry-pick -x "$sha"; then
+              git cherry-pick --abort 2>/dev/null || true
+              git reset --hard "$before"
+              printf '%s %s\n' "$sha" "$subject" >> /tmp/patchy-conflicts.txt
+              continue
+            fi
+
+            identity_ok=1
+            test -f src/ui/icons/lienzo-app.png || identity_ok=0
+            test -f packaging/linux/com.nodalix.lienzo.desktop || identity_ok=0
+            grep -q '^Name=Lienzo$' packaging/linux/com.nodalix.lienzo.desktop || identity_ok=0
+            grep -q '^Icon=com.nodalix.lienzo$' packaging/linux/com.nodalix.lienzo.desktop || identity_ok=0
+            grep -q 'com\.nodalix\.lienzo' CMakeLists.txt || identity_ok=0
+            grep -q 'lienzo-app\.png' src/ui/icons.qrc || identity_ok=0
+            grep -q 'QStringLiteral("Lienzo")' src/ui/localization.cpp || identity_ok=0
+
+            if grep -Eq 'MACOSX_BUNDLE_GUI_IDENTIFIER "com\.rtsoft\.patchy"' CMakeLists.txt; then
+              identity_ok=0
+            fi
+
+            if grep -Eq 'SethRobinson/Patchy' src/ui/update_checker.cpp src/ui/main_window_files.cpp 2>/dev/null; then
+              identity_ok=0
+            fi
+
+            if [ "$identity_ok" -ne 1 ]; then
+              git reset --hard "$before"
+              printf '%s %s [Lienzo identity guard]\n' "$sha" "$subject" >> /tmp/patchy-manual.txt
+              continue
+            fi
+
+            printf '%s %s\n' "$sha" "$subject" >> /tmp/patchy-accepted.txt
+          done < /tmp/patchy-candidates.txt
+
+          accepted="$(wc -l < /tmp/patchy-accepted.txt | tr -d " ")"
+          manual="$(wc -l < /tmp/patchy-manual.txt | tr -d " ")"
+          conflicts="$(wc -l < /tmp/patchy-conflicts.txt | tr -d " ")"
+
+          echo "accepted=$accepted" >> "$GITHUB_OUTPUT"
+          echo "manual=$manual" >> "$GITHUB_OUTPUT"
+          echo "conflicts=$conflicts" >> "$GITHUB_OUTPUT"
+
+          echo "Auto-applied: $accepted" >> "$GITHUB_STEP_SUMMARY"
+          echo "Manual review: $manual" >> "$GITHUB_STEP_SUMMARY"
+          echo "Cherry-pick conflicts: $conflicts" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Set up Python
+        if: steps.apply.outputs.accepted != '0'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Cache Qt
+        if: steps.apply.outputs.accepted != '0'
+        id: qt-cache
+        uses: actions/cache@v4
+        with:
+          path: .deps/Qt/6.8.3/gcc_64
+          key: qt-linux-6.8.3-gcc64-v1
+
+      - name: Install Linux build dependencies
+        if: steps.apply.outputs.accepted != '0'
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            ninja-build cmake libgl-dev libegl-dev libxkbcommon-dev libxkbcommon-x11-0 \
+            libfontconfig1 libfreetype6 libdbus-1-3 \
+            libxcb1 libx11-xcb1 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-shm0 libxcb-sync1 \
+            libxcb-xfixes0 libxcb-xinerama0 libxcb-xkb1 libxcb-glx0 libxcb-util1 \
+            libsm6 libice6 libxext6 libxrender1 xvfb fonts-liberation fonts-dejavu-core
+
+      - name: Install Qt 6.8.3
+        if: steps.apply.outputs.accepted != '0' && steps.qt-cache.outputs.cache-hit != 'true'
+        run: |
+          python -m pip install --upgrade pip aqtinstall
+          python -m aqt install-qt linux desktop "$QT_VERSION" linux_gcc_64 \
+            -m qtimageformats qtpdf \
+            -O .deps/Qt
+
+      - name: Configure Lienzo
+        if: steps.apply.outputs.accepted != '0'
+        run: cmake --preset linux-release
+
+      - name: Build Lienzo
+        if: steps.apply.outputs.accepted != '0'
+        run: cmake --build --preset linux-release -j 2
+
+      - name: Run full regression suite
+        if: steps.apply.outputs.accepted != '0'
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build/linux-release --output-on-failure -j 2
+
+      - name: Create sync report
+        if: always() && steps.discover.outputs.count != '0'
+        shell: bash
+        run: |
+          {
+            echo "# Weekly Patchy sync report"
+            echo
+            echo "Source: SethRobinson/Patchy@$UPSTREAM_BRANCH"
+            echo "Target: $GITHUB_REPOSITORY@main"
+            echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo
+
+            echo "## Accepted"
+            if [ -s /tmp/patchy-accepted.txt ]; then cat /tmp/patchy-accepted.txt; else echo "None."; fi
+            echo
+            echo "## Manual review"
+            if [ -s /tmp/patchy-manual.txt ]; then cat /tmp/patchy-manual.txt; else echo "None."; fi
+            echo
+            echo "## Conflicts"
+            if [ -s /tmp/patchy-conflicts.txt ]; then cat /tmp/patchy-conflicts.txt; else echo "None."; fi
+          } > /tmp/patchy-sync-report.md
+
+          cat /tmp/patchy-sync-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Push validated sync branch
+        if: steps.apply.outputs.accepted != '0' && success()
+        run: git push --force-with-lease origin "$SYNC_BRANCH"
+
+      - name: Open or update sync pull request
+        if: steps.apply.outputs.accepted != '0' && success()
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          existing="$(gh pr list \
+            --repo "$GITHUB_REPOSITORY" \
+            --head "$SYNC_BRANCH" \
+            --base main \
+            --state open \
+            --json number \
+            --jq '.[0].number // empty')"
+
+          if [ -z "$existing" ]; then
+            url="$(gh pr create \
+              --repo "$GITHUB_REPOSITORY" \
+              --head "$SYNC_BRANCH" \
+              --base main \
+              --title "chore: sync validated Patchy improvements" \
+              --body-file /tmp/patchy-sync-report.md)"
+            number="$(printf '%s' "$url" | awk -F/ '{print $NF}')"
+          else
+            number="$existing"
+            gh pr edit "$number" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "chore: sync validated Patchy improvements" \
+              --body-file /tmp/patchy-sync-report.md
+          fi
+
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+
+      - name: Merge validated upstream sync
+        if: steps.pr.outputs.number != '' && success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr merge "${{ steps.pr.outputs.number }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --merge \
+            --delete-branch
+
+      - name: Open manual-review issue when needed
+        if: always() && steps.discover.outputs.count != '0' && (steps.apply.outputs.manual != '0' || steps.apply.outputs.conflicts != '0' || failure())
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          title="Patchy sync needs manual review"
+          existing="$(gh issue list \
+            --repo "$GITHUB_REPOSITORY" \
+            --state open \
+            --search "$title in:title" \
+            --json number,title \
+            --jq '.[] | select(.title == "Patchy sync needs manual review") | .number' \
+            | head -n1)"
+
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" \
+              --repo "$GITHUB_REPOSITORY" \
+              --body-file /tmp/patchy-sync-report.md
+          else
+            gh issue create \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$title" \
+              --body-file /tmp/patchy-sync-report.md
+          fi
+
+      - name: Nothing new upstream
+        if: steps.discover.outputs.count == '0'
+        run: echo "Lienzo already contains every Patchy patch detected by git cherry."
