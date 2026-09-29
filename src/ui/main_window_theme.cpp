@@ -2925,12 +2925,107 @@ QString gnome_menu_style_template() {
 }
 
 
+
+QString gnome_primary_popover_style_template() {
+  return QStringLiteral(R"(
+
+    QFrame#gnomePrimaryMenuPopover {
+      background-color: @menu_bg;
+      color: @text_primary;
+      border: 1px solid @menu_border;
+      border-radius: 14px;
+      padding: 0;
+    }
+
+    QWidget#gnomePrimaryMenuPage,
+    QWidget#gnomeMenuRowContainer,
+    QWidget#gnomeMenuPageHeader,
+    QStackedWidget#gnomePrimaryMenuStack {
+      background: transparent;
+      border: 0;
+    }
+
+    QPushButton[gnomeMenuRow="true"] {
+      background: transparent;
+      color: @text_primary;
+      border: 0;
+      border-radius: 8px;
+      min-height: 36px;
+      padding: 0 10px;
+      text-align: left;
+      font-weight: 400;
+    }
+
+    QPushButton[gnomeMenuRow="true"]:hover {
+      background: @button_hover_bg;
+      border: 0;
+    }
+
+    QPushButton[gnomeMenuRow="true"]:pressed {
+      background: @window_chrome_pressed_bg;
+      border: 0;
+    }
+
+    QPushButton[gnomeMenuRow="true"]:disabled {
+      background: transparent;
+      color: @text_disabled;
+      border: 0;
+    }
+
+    QLabel[gnomeMenuAccessory="true"] {
+      background: transparent;
+      color: @text_secondary;
+      border: 0;
+      padding: 0 8px;
+    }
+
+    QFrame[gnomeMenuSeparator="true"] {
+      background: @menu_separator;
+      border: 0;
+      min-height: 1px;
+      max-height: 1px;
+      margin: 5px 8px;
+    }
+
+    QPushButton#gnomeMenuBackButton {
+      background: transparent;
+      color: @text_primary;
+      border: 0;
+      border-radius: 8px;
+      min-width: 28px;
+      max-width: 28px;
+      min-height: 28px;
+      max-height: 28px;
+      padding: 0;
+      font-size: 20px;
+    }
+
+    QPushButton#gnomeMenuBackButton:hover {
+      background: @button_hover_bg;
+    }
+
+    QPushButton#gnomeMenuBackButton:pressed {
+      background: @window_chrome_pressed_bg;
+    }
+
+    QLabel#gnomeMenuPageTitle {
+      background: transparent;
+      color: @text_primary;
+      border: 0;
+      font-weight: 600;
+    }
+
+  )");
+}
+
+
 QString platform_visual_style_template() {
 #ifdef Q_OS_LINUX
   // Linux follows GNOME/Adwaita semantics.
   return adwaita_refinement_style_template() +
          gnome_headerbar_style_template() +
-         gnome_menu_style_template();
+         gnome_menu_style_template() +
+         gnome_primary_popover_style_template();
 #else
   // Windows/macOS keep their native window chrome. Shared Lienzo
   // refinements remain active while dedicated platform styles are built.

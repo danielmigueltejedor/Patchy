@@ -260,6 +260,294 @@ class AdwaitaHeaderBar final : public QToolBar {
     QToolBar::mouseDoubleClickEvent(event);
   }
 };
+
+
+class GnomePrimaryMenuPopover final : public QFrame {
+ public:
+  GnomePrimaryMenuPopover(QWidget* action_root, QMenuBar* menu_bar, QWidget* parent)
+      : QFrame(parent, Qt::Popup | Qt::FramelessWindowHint),
+        action_root_(action_root),
+        menu_bar_(menu_bar) {
+    setObjectName(QStringLiteral("gnomePrimaryMenuPopover"));
+    // The popup itself is the Adwaita surface. Keeping the top-level
+    // translucent makes Qt/Wayland paint only its children on some compositors.
+    // Force stylesheet background painting instead.
+    setAttribute(Qt::WA_TranslucentBackground, false);
+    setAttribute(Qt::WA_StyledBackground, true);
+    setAutoFillBackground(true);
+    setFocusPolicy(Qt::StrongFocus);
+
+    auto* outer = new QVBoxLayout(this);
+    outer->setContentsMargins(6, 6, 6, 6);
+    outer->setSpacing(0);
+
+    stack_ = new QStackedWidget(this);
+    stack_->setObjectName(QStringLiteral("gnomePrimaryMenuStack"));
+    outer->addWidget(stack_);
+  }
+
+  void show_for(QToolButton* anchor) {
+    if (anchor == nullptr) {
+      return;
+    }
+
+    rebuild_root();
+    setFixedWidth(300);
+    adjustSize();
+
+    const QPoint bottom_right =
+        anchor->mapToGlobal(QPoint(anchor->width(), anchor->height() + 6));
+
+    move(bottom_right.x() - width(), bottom_right.y());
+    show();
+    raise();
+    setFocus(Qt::PopupFocusReason);
+  }
+
+ private:
+  static QString display_text(QString text) {
+    text.remove(QLatin1Char('&'));
+    text.replace(QStringLiteral("..."), QStringLiteral("…"));
+    return text.trimmed();
+  }
+
+  QAction* find_action(const char* name) const {
+    return action_root_ == nullptr
+               ? nullptr
+               : action_root_->findChild<QAction*>(QString::fromLatin1(name));
+  }
+
+  QMenu* find_menu(const char* name) const {
+    return action_root_ == nullptr
+               ? nullptr
+               : action_root_->findChild<QMenu*>(QString::fromLatin1(name));
+  }
+
+  QWidget* create_page() {
+    auto* page = new QWidget(stack_);
+    page->setObjectName(QStringLiteral("gnomePrimaryMenuPage"));
+
+    auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(2);
+
+    return page;
+  }
+
+  QVBoxLayout* page_layout(QWidget* page) const {
+    return qobject_cast<QVBoxLayout*>(page == nullptr ? nullptr : page->layout());
+  }
+
+  void add_separator(QVBoxLayout* layout) {
+    if (layout == nullptr) {
+      return;
+    }
+
+    auto* separator = new QFrame;
+    separator->setProperty("gnomeMenuSeparator", true);
+    separator->setFrameShape(QFrame::NoFrame);
+    layout->addWidget(separator);
+  }
+
+  void add_action_row(QVBoxLayout* layout, QAction* action) {
+    if (layout == nullptr || action == nullptr || !action->isVisible()) {
+      return;
+    }
+
+    if (action->objectName() == QStringLiteral("fileCloseAction") ||
+        action->objectName() == QStringLiteral("fileCloseAllAction") ||
+        action->menuRole() == QAction::QuitRole) {
+      return;
+    }
+
+    auto* row = new QWidget;
+    row->setObjectName(QStringLiteral("gnomeMenuRowContainer"));
+
+    auto* row_layout = new QHBoxLayout(row);
+    row_layout->setContentsMargins(0, 0, 0, 0);
+    row_layout->setSpacing(6);
+
+    auto* button = new QPushButton(display_text(action->text()), row);
+    button->setProperty("gnomeMenuRow", true);
+    button->setEnabled(action->isEnabled());
+    button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+
+    if (!action->icon().isNull()) {
+      button->setIcon(action->icon());
+      button->setIconSize(QSize(16, 16));
+    }
+
+    row_layout->addWidget(button, 1);
+
+    if (!action->shortcut().isEmpty()) {
+      auto* shortcut = new QLabel(action->shortcut().toString(QKeySequence::NativeText), row);
+      shortcut->setProperty("gnomeMenuAccessory", true);
+      shortcut->setAttribute(Qt::WA_TransparentForMouseEvents);
+      row_layout->addWidget(shortcut);
+    }
+
+    connect(button, &QPushButton::clicked, this, [this, action] {
+      hide();
+      action->trigger();
+    });
+
+    layout->addWidget(row);
+  }
+
+  void add_menu_row(QVBoxLayout* layout, QMenu* menu) {
+    if (layout == nullptr || menu == nullptr || !menu->menuAction()->isVisible()) {
+      return;
+    }
+
+    auto* row = new QWidget;
+    row->setObjectName(QStringLiteral("gnomeMenuRowContainer"));
+
+    auto* row_layout = new QHBoxLayout(row);
+    row_layout->setContentsMargins(0, 0, 0, 0);
+    row_layout->setSpacing(6);
+
+    auto* button = new QPushButton(display_text(menu->title()), row);
+    button->setProperty("gnomeMenuRow", true);
+    button->setProperty("gnomeMenuSubmenuRow", true);
+    button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+
+    row_layout->addWidget(button, 1);
+
+    auto* chevron = new QLabel(QStringLiteral("›"), row);
+    chevron->setProperty("gnomeMenuAccessory", true);
+    chevron->setAttribute(Qt::WA_TransparentForMouseEvents);
+    row_layout->addWidget(chevron);
+
+    connect(button, &QPushButton::clicked, this, [this, menu] {
+      push_menu(menu);
+    });
+
+    layout->addWidget(row);
+  }
+
+  void add_page_header(QVBoxLayout* layout, const QString& title) {
+    if (layout == nullptr) {
+      return;
+    }
+
+    auto* header = new QWidget;
+    header->setObjectName(QStringLiteral("gnomeMenuPageHeader"));
+
+    auto* header_layout = new QHBoxLayout(header);
+    header_layout->setContentsMargins(0, 0, 0, 4);
+    header_layout->setSpacing(6);
+
+    auto* back = new QPushButton(QStringLiteral("‹"), header);
+    back->setObjectName(QStringLiteral("gnomeMenuBackButton"));
+    back->setFixedSize(28, 28);
+    back->setFocusPolicy(Qt::NoFocus);
+
+    auto* label = new QLabel(display_text(title), header);
+    label->setObjectName(QStringLiteral("gnomeMenuPageTitle"));
+    label->setAlignment(Qt::AlignCenter);
+
+    auto* balance = new QWidget(header);
+    balance->setFixedWidth(28);
+    balance->setAttribute(Qt::WA_TransparentForMouseEvents);
+
+    header_layout->addWidget(back);
+    header_layout->addWidget(label, 1);
+    header_layout->addWidget(balance);
+
+    connect(back, &QPushButton::clicked, this, [this] {
+      pop_page();
+    });
+
+    layout->addWidget(header);
+  }
+
+  QWidget* build_menu_page(QMenu* menu) {
+    auto* page = create_page();
+    auto* layout = page_layout(page);
+
+    add_page_header(layout, menu == nullptr ? QString() : menu->title());
+
+    if (menu == nullptr) {
+      return page;
+    }
+
+    QMetaObject::invokeMethod(menu, "aboutToShow", Qt::DirectConnection);
+
+    for (auto* action : menu->actions()) {
+      if (action == nullptr || !action->isVisible()) {
+        continue;
+      }
+
+      if (action->isSeparator()) {
+        add_separator(layout);
+      } else if (action->menu() != nullptr) {
+        add_menu_row(layout, action->menu());
+      } else {
+        add_action_row(layout, action);
+      }
+    }
+
+    return page;
+  }
+
+  void push_menu(QMenu* menu) {
+    auto* page = build_menu_page(menu);
+    stack_->addWidget(page);
+    stack_->setCurrentWidget(page);
+    adjustSize();
+  }
+
+  void pop_page() {
+    if (stack_->count() <= 1) {
+      return;
+    }
+
+    auto* current = stack_->currentWidget();
+    stack_->setCurrentIndex(stack_->count() - 2);
+    stack_->removeWidget(current);
+    current->deleteLater();
+    adjustSize();
+  }
+
+  void rebuild_root() {
+    while (stack_->count() > 0) {
+      auto* page = stack_->widget(0);
+      stack_->removeWidget(page);
+      page->deleteLater();
+    }
+
+    auto* root = create_page();
+    auto* layout = page_layout(root);
+
+    add_action_row(layout, find_action("fileNewAction"));
+    add_action_row(layout, find_action("fileOpenAction"));
+
+    add_separator(layout);
+
+    static constexpr std::array<const char*, 10> kMainMenus = {
+        "fileMenu", "editMenu", "imageMenu", "layerMenu", "typeMenu",
+        "selectMenu", "filterMenu", "pluginsMenu", "viewMenu", "windowMenu"};
+
+    for (const auto* name : kMainMenus) {
+      add_menu_row(layout, find_menu(name));
+    }
+
+    add_separator(layout);
+
+    add_action_row(layout, find_action("filePreferencesAction"));
+    add_action_row(layout, find_action("helpScriptingGuideAction"));
+    add_action_row(layout, find_action("helpAiSetupAction"));
+    add_action_row(layout, find_action("helpAboutAction"));
+
+    stack_->addWidget(root);
+    stack_->setCurrentWidget(root);
+  }
+
+  QWidget* action_root_ = nullptr;
+  QMenuBar* menu_bar_ = nullptr;
+  QStackedWidget* stack_ = nullptr;
+};
+
 #endif
 
 
@@ -900,55 +1188,7 @@ void MainWindow::configure_window_chrome() {
     addToolBarBreak(Qt::TopToolBarArea);
   }
 
-  auto* app_menu = new QMenu(header);
-  app_menu->setObjectName(QStringLiteral("headerAppMenu"));
-
-  const auto add_existing_action =
-      [this, app_menu](const char* object_name) {
-        auto* action =
-            findChild<QAction*>(QString::fromLatin1(object_name));
-
-        if (action != nullptr) {
-          app_menu->addAction(action);
-        }
-      };
-
-  const auto add_existing_menu =
-      [this, app_menu](const char* object_name) {
-        auto* menu =
-            findChild<QMenu*>(QString::fromLatin1(object_name));
-
-        if (menu != nullptr) {
-          app_menu->addAction(menu->menuAction());
-        }
-      };
-
-  // Primary GNOME-style section: frequent document actions.
-  add_existing_action("fileNewAction");
-  add_existing_action("fileOpenAction");
-
-  app_menu->addSeparator();
-
-  // Lienzo is a complex editor, so the complete command surface remains
-  // reachable as grouped submenus rather than recreating a desktop menubar.
-  add_existing_menu("fileMenu");
-  add_existing_menu("editMenu");
-  add_existing_menu("imageMenu");
-  add_existing_menu("layerMenu");
-  add_existing_menu("typeMenu");
-  add_existing_menu("selectMenu");
-  add_existing_menu("filterMenu");
-  add_existing_menu("pluginsMenu");
-  add_existing_menu("viewMenu");
-  add_existing_menu("windowMenu");
-
-  app_menu->addSeparator();
-
-  // Application-level actions belong at the bottom of a GNOME primary menu.
-  add_existing_action("filePreferencesAction");
-  add_existing_action("helpScriptingGuideAction");
-  add_existing_action("helpAiSetupAction");
-  add_existing_action("helpAboutAction");
+  auto* app_popover = new GnomePrimaryMenuPopover(this, bar, header);
 
   bar->hide();
 
@@ -989,8 +1229,7 @@ void MainWindow::configure_window_chrome() {
 
   auto* menu_button = new QToolButton(header);
   menu_button->setObjectName(QStringLiteral("headerMenuButton"));
-  menu_button->setPopupMode(QToolButton::InstantPopup);
-  menu_button->setMenu(app_menu);
+  menu_button->setAutoRaise(false);
   menu_button->setFocusPolicy(Qt::NoFocus);
   menu_button->setFixedSize(28, 28);
 
@@ -1005,6 +1244,11 @@ void MainWindow::configure_window_chrome() {
   }
 
   header->addWidget(menu_button);
+
+  connect(menu_button, &QToolButton::clicked, app_popover,
+          [app_popover, menu_button] {
+            app_popover->show_for(menu_button);
+          });
 
   auto* gnome_close_button = new QToolButton(header);
   gnome_close_button->setObjectName(QStringLiteral("windowCloseButton"));
