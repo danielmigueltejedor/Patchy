@@ -566,6 +566,56 @@ void ui_dialog_position_memory_centers_unmoved_dialogs_on_parent() {
   settings.sync();
 }
 
+// Progress dialogs are transient status windows: a remembered position (here a
+// seeded one from an earlier layout) is ignored, the dialog is centered on its
+// owner, and moving it records nothing.
+void ui_progress_dialogs_ignore_position_memory_and_center_on_parent() {
+  const auto settings_group = QStringLiteral("dialogPositions/patchyProgressPositionTest");
+  const auto screen_rect = QApplication::primaryScreen() != nullptr
+                               ? QApplication::primaryScreen()->availableGeometry()
+                               : QRect(0, 0, 640, 480);
+  const auto far_position = screen_rect.topLeft() + QPoint(4, 5);
+  {
+    auto settings = patchy::ui::app_settings();
+    settings.remove(settings_group);
+    settings.setValue(settings_group + QStringLiteral("/pos"), far_position);
+    settings.setValue(settings_group + QStringLiteral("/moved"), true);
+    settings.sync();
+  }
+
+  QWidget parent;
+  parent.resize(420, 260);
+  parent.move(screen_rect.topLeft() + QPoint(160, 120));
+  parent.show();
+  QApplication::processEvents();
+
+  {
+    QProgressDialog dialog(QStringLiteral("Opening..."), QString(), 0, 0, &parent);
+    dialog.setObjectName(QStringLiteral("patchyProgressPositionTest"));
+    dialog.setMinimumDuration(0);
+    dialog.resize(220, 90);
+    patchy::ui::remember_dialog_position(dialog);
+    dialog.show();
+    QApplication::processEvents();
+
+    const auto expected_position =
+        parent.frameGeometry().center() - QPoint(dialog.size().width() / 2, dialog.size().height() / 2);
+    CHECK((dialog.pos() - expected_position).manhattanLength() <= 10);
+    CHECK((dialog.pos() - far_position).manhattanLength() > 10);
+
+    dialog.move(far_position);
+    QApplication::processEvents();
+    dialog.close();
+    QApplication::processEvents();
+  }
+
+  auto settings = patchy::ui::app_settings();
+  CHECK(!settings.value(settings_group + QStringLiteral("/pos")).isValid());
+  CHECK(!settings.value(settings_group + QStringLiteral("/moved"), false).toBool());
+  settings.remove(settings_group);
+  settings.sync();
+}
+
 void ui_dirty_state_marks_tabs_and_undo_restores_saved_revision() {
   patchy::ui::MainWindow window;
   show_window(window);
@@ -1807,6 +1857,8 @@ std::vector<patchy::test::TestCase> pickers_notices_hotkeys_tests() {
       {"ui_dialog_position_memory_restores_last_position", ui_dialog_position_memory_restores_last_position},
       {"ui_dialog_position_memory_centers_unmoved_dialogs_on_parent",
        ui_dialog_position_memory_centers_unmoved_dialogs_on_parent},
+      {"ui_progress_dialogs_ignore_position_memory_and_center_on_parent",
+       ui_progress_dialogs_ignore_position_memory_and_center_on_parent},
       {"ui_dirty_state_marks_tabs_and_undo_restores_saved_revision",
        ui_dirty_state_marks_tabs_and_undo_restores_saved_revision},
       {"ui_compatibility_report_flags_psd_text_placeholders",
