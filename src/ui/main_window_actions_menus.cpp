@@ -478,6 +478,7 @@ void MainWindow::build_menu_bar_actions(ActionBuildContext& ctx) {
   auto* preferences_action = file_menu->addAction(tr("&Preferences..."));
   file_menu->addSeparator();
   auto* quit_action = file_menu->addAction(tr("&Quit"));
+  quit_action->setObjectName(QStringLiteral("fileQuitAction"));
   new_action->setObjectName(QStringLiteral("fileNewAction"));
   open_action->setObjectName(QStringLiteral("fileOpenAction"));
   save_action->setObjectName(QStringLiteral("fileSaveAction"));

@@ -2807,12 +2807,15 @@ QString gnome_headerbar_style_template() {
     QToolButton#headerMenuButton {
       background: transparent;
       color: @text_primary;
+
       border: 0;
       border-radius: 7px;
-      min-width: 28px;
-      max-width: 28px;
-      min-height: 28px;
-      max-height: 28px;
+
+      min-width: 30px;
+      max-width: 30px;
+      min-height: 30px;
+      max-height: 30px;
+
       padding: 0;
     }
 
@@ -2933,8 +2936,8 @@ QString gnome_primary_popover_style_template() {
       background-color: @menu_bg;
       color: @text_primary;
       border: 1px solid @menu_border;
-      border-radius: 14px;
-      padding: 0;
+      border-radius: 10px;
+      padding: 4px;
     }
 
     QWidget#gnomePrimaryMenuPage,
@@ -2949,9 +2952,10 @@ QString gnome_primary_popover_style_template() {
       background: transparent;
       color: @text_primary;
       border: 0;
-      border-radius: 8px;
-      min-height: 36px;
-      padding: 0 10px;
+      border-radius: 6px;
+      min-height: 30px;
+      max-height: 30px;
+      padding: 0 8px;
       text-align: left;
       font-weight: 400;
     }
@@ -2974,9 +2978,10 @@ QString gnome_primary_popover_style_template() {
 
     QLabel[gnomeMenuAccessory="true"] {
       background: transparent;
-      color: @text_secondary;
+      color: @text_disabled;
       border: 0;
-      padding: 0 8px;
+      padding: 0 4px;
+      font-size: 10px;
     }
 
     QFrame[gnomeMenuSeparator="true"] {
@@ -2984,20 +2989,21 @@ QString gnome_primary_popover_style_template() {
       border: 0;
       min-height: 1px;
       max-height: 1px;
-      margin: 5px 8px;
+      margin: 3px 5px;
     }
 
     QPushButton#gnomeMenuBackButton {
       background: transparent;
       color: @text_primary;
       border: 0;
-      border-radius: 8px;
-      min-width: 28px;
-      max-width: 28px;
-      min-height: 28px;
-      max-height: 28px;
+      border-radius: 6px;
+      min-width: 26px;
+      max-width: 26px;
+      min-height: 26px;
+      max-height: 26px;
       padding: 0;
-      font-size: 20px;
+      font-size: 17px;
+      font-weight: 500;
     }
 
     QPushButton#gnomeMenuBackButton:hover {

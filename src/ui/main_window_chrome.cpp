@@ -7,6 +7,7 @@
 
 #include "ui/main_window.hpp"
 #include "ui/main_window_shared.hpp"
+#include "ui/theme_palette.hpp"
 
 #include "core/layer_metadata.hpp"
 #include "core/layer_render_utils.hpp"
@@ -262,6 +263,223 @@ class AdwaitaHeaderBar final : public QToolBar {
 };
 
 
+
+class GnomeMenuRowWidget final : public QWidget {
+ public:
+  using Activate = std::function<void()>;
+
+  GnomeMenuRowWidget(QString text,
+                     QString accessory,
+                     bool submenu,
+                     bool enabled,
+                     Activate activate,
+                     QWidget* parent = nullptr)
+      : QWidget(parent),
+        text_(std::move(text)),
+        accessory_(std::move(accessory)),
+        submenu_(submenu),
+        activate_(std::move(activate)) {
+    setObjectName(QStringLiteral("gnomeMenuRowWidget"));
+    setEnabled(enabled);
+    setFocusPolicy(Qt::StrongFocus);
+    setMinimumHeight(32);
+    setMaximumHeight(32);
+    setAccessibleName(text_);
+  }
+
+  QSize sizeHint() const override {
+    return QSize(210, 32);
+  }
+
+ protected:
+  bool event(QEvent* event) override {
+    switch (event->type()) {
+      case QEvent::Enter:
+        hovered_ = true;
+        update();
+        break;
+      case QEvent::Leave:
+        hovered_ = false;
+        pressed_ = false;
+        update();
+        break;
+      case QEvent::FocusIn:
+      case QEvent::FocusOut:
+        update();
+        break;
+      default:
+        break;
+    }
+
+    return QWidget::event(event);
+  }
+
+  void mousePressEvent(QMouseEvent* event) override {
+    if (event->button() == Qt::LeftButton && isEnabled()) {
+      pressed_ = true;
+      update();
+      event->accept();
+      return;
+    }
+
+    QWidget::mousePressEvent(event);
+  }
+
+  void mouseReleaseEvent(QMouseEvent* event) override {
+    const bool activate =
+        pressed_ &&
+        event->button() == Qt::LeftButton &&
+        rect().contains(event->position().toPoint()) &&
+        isEnabled();
+
+    pressed_ = false;
+    update();
+
+    if (activate && activate_) {
+      activate_();
+      event->accept();
+      return;
+    }
+
+    QWidget::mouseReleaseEvent(event);
+  }
+
+  void keyPressEvent(QKeyEvent* event) override {
+    if (isEnabled() &&
+        (event->key() == Qt::Key_Return ||
+         event->key() == Qt::Key_Enter ||
+         event->key() == Qt::Key_Space)) {
+      if (activate_) {
+        activate_();
+      }
+
+      event->accept();
+      return;
+    }
+
+    QWidget::keyPressEvent(event);
+  }
+
+  void paintEvent(QPaintEvent*) override {
+    const auto& palette = theme();
+
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+
+    const QRectF row_rect =
+        QRectF(rect()).adjusted(1.0, 1.0, -1.0, -1.0);
+
+    if (pressed_) {
+      painter.setPen(Qt::NoPen);
+      painter.setBrush(palette.window_chrome_pressed_bg);
+      painter.drawRoundedRect(row_rect, 7.0, 7.0);
+    } else if (hovered_ || hasFocus()) {
+      painter.setPen(Qt::NoPen);
+      painter.setBrush(palette.menu_item_selected_bg);
+      painter.drawRoundedRect(row_rect, 7.0, 7.0);
+    }
+
+    QFont label_font = font();
+    label_font.setWeight(QFont::Normal);
+    painter.setFont(label_font);
+
+    const QColor foreground =
+        isEnabled() ? palette.text_primary : palette.text_disabled;
+
+    painter.setPen(foreground);
+
+    const QRect content =
+        rect().adjusted(10, 0, -10, 0);
+
+    int accessory_width = 0;
+
+    if (!accessory_.isEmpty() && !submenu_) {
+      QFont accessory_font = label_font;
+
+      if (accessory_font.pointSizeF() > 0.0) {
+        accessory_font.setPointSizeF(
+            std::max(8.0, accessory_font.pointSizeF() - 1.0));
+      }
+
+      const QFontMetrics accessory_metrics(accessory_font);
+      accessory_width =
+          accessory_metrics.horizontalAdvance(accessory_) + 14;
+
+      painter.setFont(accessory_font);
+      painter.setPen(palette.text_disabled);
+
+      painter.drawText(
+          content,
+          Qt::AlignRight | Qt::AlignVCenter,
+          accessory_);
+
+      painter.setFont(label_font);
+      painter.setPen(foreground);
+    }
+
+    const QFontMetrics metrics(label_font);
+
+    const QRect label_rect =
+        content.adjusted(
+            0,
+            0,
+            -(accessory_width + (submenu_ ? 22 : 0)),
+            0);
+
+    const QString elided =
+        metrics.elidedText(
+            text_,
+            Qt::ElideRight,
+            label_rect.width());
+
+    painter.drawText(
+        label_rect,
+        Qt::AlignLeft | Qt::AlignVCenter,
+        elided);
+
+    if (submenu_) {
+      const qreal cx = width() - 13.0;
+      const qreal cy = height() / 2.0;
+
+      QPen pen(palette.text_secondary);
+      pen.setWidthF(1.6);
+      pen.setCapStyle(Qt::RoundCap);
+      pen.setJoinStyle(Qt::RoundJoin);
+
+      painter.setPen(pen);
+      painter.setBrush(Qt::NoBrush);
+
+      QPainterPath path;
+      path.moveTo(cx - 2.0, cy - 4.0);
+      path.lineTo(cx + 2.0, cy);
+      path.lineTo(cx - 2.0, cy + 4.0);
+
+      painter.drawPath(path);
+    }
+
+    if (hasFocus()) {
+      QPen focus_pen(palette.accent);
+      focus_pen.setWidthF(1.0);
+
+      painter.setPen(focus_pen);
+      painter.setBrush(Qt::NoBrush);
+      painter.drawRoundedRect(
+          row_rect.adjusted(0.5, 0.5, -0.5, -0.5),
+          7.0,
+          7.0);
+    }
+  }
+
+ private:
+  QString text_;
+  QString accessory_;
+  bool submenu_ = false;
+  bool hovered_ = false;
+  bool pressed_ = false;
+  Activate activate_;
+};
+
+
 class GnomePrimaryMenuPopover final : public QFrame {
  public:
   GnomePrimaryMenuPopover(QWidget* action_root, QMenuBar* menu_bar, QWidget* parent)
@@ -278,7 +496,7 @@ class GnomePrimaryMenuPopover final : public QFrame {
     setFocusPolicy(Qt::StrongFocus);
 
     auto* outer = new QVBoxLayout(this);
-    outer->setContentsMargins(6, 6, 6, 6);
+    outer->setContentsMargins(5, 5, 5, 5);
     outer->setSpacing(0);
 
     stack_ = new QStackedWidget(this);
@@ -292,7 +510,7 @@ class GnomePrimaryMenuPopover final : public QFrame {
     }
 
     rebuild_root();
-    setFixedWidth(300);
+    setFixedWidth(210);
     adjustSize();
 
     const QPoint bottom_right =
@@ -350,80 +568,57 @@ class GnomePrimaryMenuPopover final : public QFrame {
   }
 
   void add_action_row(QVBoxLayout* layout, QAction* action) {
-    if (layout == nullptr || action == nullptr || !action->isVisible()) {
+    if (layout == nullptr ||
+        action == nullptr ||
+        !action->isVisible()) {
       return;
     }
 
     if (action->objectName() == QStringLiteral("fileCloseAction") ||
-        action->objectName() == QStringLiteral("fileCloseAllAction") ||
-        action->menuRole() == QAction::QuitRole) {
+        action->objectName() == QStringLiteral("fileCloseAllAction")) {
       return;
     }
 
-    auto* row = new QWidget;
-    row->setObjectName(QStringLiteral("gnomeMenuRowContainer"));
-
-    auto* row_layout = new QHBoxLayout(row);
-    row_layout->setContentsMargins(0, 0, 0, 0);
-    row_layout->setSpacing(6);
-
-    auto* button = new QPushButton(display_text(action->text()), row);
-    button->setProperty("gnomeMenuRow", true);
-    button->setEnabled(action->isEnabled());
-    button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-
-    if (!action->icon().isNull()) {
-      button->setIcon(action->icon());
-      button->setIconSize(QSize(16, 16));
-    }
-
-    row_layout->addWidget(button, 1);
+    QString shortcut;
 
     if (!action->shortcut().isEmpty()) {
-      auto* shortcut = new QLabel(action->shortcut().toString(QKeySequence::NativeText), row);
-      shortcut->setProperty("gnomeMenuAccessory", true);
-      shortcut->setAttribute(Qt::WA_TransparentForMouseEvents);
-      row_layout->addWidget(shortcut);
+      shortcut =
+          action->shortcut().toString(QKeySequence::NativeText);
     }
 
-    connect(button, &QPushButton::clicked, this, [this, action] {
-      hide();
-      action->trigger();
-    });
+    auto* row = new GnomeMenuRowWidget(
+        display_text(action->text()),
+        shortcut,
+        false,
+        action->isEnabled(),
+        [this, action] {
+          hide();
+          action->trigger();
+        });
 
     layout->addWidget(row);
   }
 
+
   void add_menu_row(QVBoxLayout* layout, QMenu* menu) {
-    if (layout == nullptr || menu == nullptr || !menu->menuAction()->isVisible()) {
+    if (layout == nullptr ||
+        menu == nullptr ||
+        !menu->menuAction()->isVisible()) {
       return;
     }
 
-    auto* row = new QWidget;
-    row->setObjectName(QStringLiteral("gnomeMenuRowContainer"));
-
-    auto* row_layout = new QHBoxLayout(row);
-    row_layout->setContentsMargins(0, 0, 0, 0);
-    row_layout->setSpacing(6);
-
-    auto* button = new QPushButton(display_text(menu->title()), row);
-    button->setProperty("gnomeMenuRow", true);
-    button->setProperty("gnomeMenuSubmenuRow", true);
-    button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-
-    row_layout->addWidget(button, 1);
-
-    auto* chevron = new QLabel(QStringLiteral("›"), row);
-    chevron->setProperty("gnomeMenuAccessory", true);
-    chevron->setAttribute(Qt::WA_TransparentForMouseEvents);
-    row_layout->addWidget(chevron);
-
-    connect(button, &QPushButton::clicked, this, [this, menu] {
-      push_menu(menu);
-    });
+    auto* row = new GnomeMenuRowWidget(
+        display_text(menu->title()),
+        QString(),
+        true,
+        menu->menuAction()->isEnabled(),
+        [this, menu] {
+          push_menu(menu);
+        });
 
     layout->addWidget(row);
   }
+
 
   void add_page_header(QVBoxLayout* layout, const QString& title) {
     if (layout == nullptr) {
@@ -519,25 +714,53 @@ class GnomePrimaryMenuPopover final : public QFrame {
     auto* root = create_page();
     auto* layout = page_layout(root);
 
+    /*
+       Same primary-menu hierarchy used by Vinilo/GNOME:
+       the hamburger contains APPLICATION actions, not the complete
+       desktop-editor menubar.
+    */
+
     add_action_row(layout, find_action("fileNewAction"));
     add_action_row(layout, find_action("fileOpenAction"));
 
     add_separator(layout);
 
-    static constexpr std::array<const char*, 10> kMainMenus = {
-        "fileMenu", "editMenu", "imageMenu", "layerMenu", "typeMenu",
-        "selectMenu", "filterMenu", "pluginsMenu", "viewMenu", "windowMenu"};
+    /*
+       Lienzo is substantially more complex than Vinilo. Keep the complete
+       editor command surface available, but put it behind one navigation row
+       rather than turning the primary menu into a Photoshop menubar.
+    */
+    auto* editor_menu = new QMenu(QStringLiteral("Editor"), root);
 
-    for (const auto* name : kMainMenus) {
-      add_menu_row(layout, find_menu(name));
+    static constexpr std::array<const char*, 10> kEditorMenus = {
+        "fileMenu",
+        "editMenu",
+        "imageMenu",
+        "layerMenu",
+        "typeMenu",
+        "selectMenu",
+        "filterMenu",
+        "pluginsMenu",
+        "viewMenu",
+        "windowMenu",
+    };
+
+    for (const auto* name : kEditorMenus) {
+      if (auto* menu = find_menu(name); menu != nullptr) {
+        editor_menu->addAction(menu->menuAction());
+      }
     }
+
+    add_menu_row(layout, editor_menu);
 
     add_separator(layout);
 
     add_action_row(layout, find_action("filePreferencesAction"));
-    add_action_row(layout, find_action("helpScriptingGuideAction"));
-    add_action_row(layout, find_action("helpAiSetupAction"));
     add_action_row(layout, find_action("helpAboutAction"));
+
+    add_separator(layout);
+
+    add_action_row(layout, find_action("fileQuitAction"));
 
     stack_->addWidget(root);
     stack_->setCurrentWidget(root);
@@ -1231,7 +1454,7 @@ void MainWindow::configure_window_chrome() {
   menu_button->setObjectName(QStringLiteral("headerMenuButton"));
   menu_button->setAutoRaise(false);
   menu_button->setFocusPolicy(Qt::NoFocus);
-  menu_button->setFixedSize(28, 28);
+  menu_button->setFixedSize(30, 30);
 
   const auto menu_icon =
       QIcon::fromTheme(QStringLiteral("open-menu-symbolic"));

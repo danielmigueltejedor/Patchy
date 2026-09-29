@@ -65,10 +65,10 @@ const ThemePalette& dark_palette() {
       // Menu bar and menus.
       .menu_bar_item_hover_bg = rgb(0x3a3a3a),
       .menu_bar_text_disabled = rgb(0x9a9a9a),
-      .menu_bg = rgb(0x303030),
-      .menu_border = rgb(0x454545),
-      .menu_item_selected_bg = rgb(0x3d3d3d),
-      .menu_separator = rgb(0x454545),
+      .menu_bg = rgb(0x36363a),
+      .menu_border = rgb(0x4a4a4e),
+      .menu_item_selected_bg = rgb(0x454549),
+      .menu_separator = rgb(0x4a4a4e),
 
       // Generic toolbars and tool buttons.
       .toolbar_bg = rgb(0x303030),
@@ -688,9 +688,9 @@ const ThemePalette& light_palette() {
 
     light.menu_bar_item_hover_bg = rgb(0xdeddda);
     light.menu_bg = rgb(0xffffff);
-    light.menu_border = rgb(0xd5d5d5);
-    light.menu_item_selected_bg = rgb(0xebebeb);
-    light.menu_separator = rgb(0xdeddda);
+    light.menu_border = rgb(0xd8d8da);
+    light.menu_item_selected_bg = rgb(0xebebed);
+    light.menu_separator = rgb(0xdedee0);
 
     light.toolbar_bg = rgb(0xf6f5f4);
     light.toolbar_border = rgb(0xdeddda);
