@@ -903,11 +903,52 @@ void MainWindow::configure_window_chrome() {
   auto* app_menu = new QMenu(header);
   app_menu->setObjectName(QStringLiteral("headerAppMenu"));
 
-  for (auto* action : bar->actions()) {
-    if (action != nullptr && action->menu() != nullptr) {
-      app_menu->addAction(action);
-    }
-  }
+  const auto add_existing_action =
+      [this, app_menu](const char* object_name) {
+        auto* action =
+            findChild<QAction*>(QString::fromLatin1(object_name));
+
+        if (action != nullptr) {
+          app_menu->addAction(action);
+        }
+      };
+
+  const auto add_existing_menu =
+      [this, app_menu](const char* object_name) {
+        auto* menu =
+            findChild<QMenu*>(QString::fromLatin1(object_name));
+
+        if (menu != nullptr) {
+          app_menu->addAction(menu->menuAction());
+        }
+      };
+
+  // Primary GNOME-style section: frequent document actions.
+  add_existing_action("fileNewAction");
+  add_existing_action("fileOpenAction");
+
+  app_menu->addSeparator();
+
+  // Lienzo is a complex editor, so the complete command surface remains
+  // reachable as grouped submenus rather than recreating a desktop menubar.
+  add_existing_menu("fileMenu");
+  add_existing_menu("editMenu");
+  add_existing_menu("imageMenu");
+  add_existing_menu("layerMenu");
+  add_existing_menu("typeMenu");
+  add_existing_menu("selectMenu");
+  add_existing_menu("filterMenu");
+  add_existing_menu("pluginsMenu");
+  add_existing_menu("viewMenu");
+  add_existing_menu("windowMenu");
+
+  app_menu->addSeparator();
+
+  // Application-level actions belong at the bottom of a GNOME primary menu.
+  add_existing_action("filePreferencesAction");
+  add_existing_action("helpScriptingGuideAction");
+  add_existing_action("helpAiSetupAction");
+  add_existing_action("helpAboutAction");
 
   bar->hide();
 

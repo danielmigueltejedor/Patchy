@@ -289,6 +289,15 @@ void MainWindow::build_menu_bar_actions(ActionBuildContext& ctx) {
   auto* view_menu = menuBar()->addMenu(tr("&View"));
   auto* window_menu = menuBar()->addMenu(tr("&Window"));
   auto* help_menu = menuBar()->addMenu(tr("&Help"));
+
+  file_menu->setObjectName(QStringLiteral("fileMenu"));
+  edit_menu->setObjectName(QStringLiteral("editMenu"));
+  image_menu->setObjectName(QStringLiteral("imageMenu"));
+  type_menu->setObjectName(QStringLiteral("typeMenu"));
+  select_menu->setObjectName(QStringLiteral("selectMenu"));
+  plugins_menu->setObjectName(QStringLiteral("pluginsMenu"));
+  view_menu->setObjectName(QStringLiteral("viewMenu"));
+  help_menu->setObjectName(QStringLiteral("helpMenu"));
   layer_menu->setObjectName(QStringLiteral("layerMenu"));
   filter_menu->setObjectName(QStringLiteral("filterMenu"));
   bind_action_text(file_menu->menuAction(), QT_TRANSLATE_NOOP("patchy::ui::MainWindow", "&File"));
@@ -1889,6 +1898,7 @@ void MainWindow::build_menu_bar_actions(ActionBuildContext& ctx) {
 #endif
 
   auto* about_action = help_menu->addAction(tr("&About Patchy"));
+  about_action->setObjectName(QStringLiteral("helpAboutAction"));
   about_action->setMenuRole(QAction::AboutRole);
   connect(about_action, &QAction::triggered, this, [this] { show_about(); });
 

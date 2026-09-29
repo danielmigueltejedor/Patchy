@@ -2863,11 +2863,74 @@ QString gnome_headerbar_style_template() {
   )");
 }
 
+
+QString gnome_menu_style_template() {
+  return QStringLiteral(R"(
+
+    /*
+       GNOME-style popover menus.
+
+       QMenu remains the Qt action transport, but its visual semantics follow
+       GtkPopoverMenu: one raised surface, grouped rows, quiet selection and
+       generous rounded hit targets.
+    */
+
+    QMenu {
+      background: @menu_bg;
+      color: @text_primary;
+
+      border: 1px solid @menu_border;
+      border-radius: 12px;
+
+      padding: 6px;
+    }
+
+    QMenu#headerAppMenu {
+      min-width: 250px;
+    }
+
+    QMenu::item {
+      background: transparent;
+      color: @text_primary;
+
+      border: 0;
+      border-radius: 8px;
+
+      padding: 8px 28px 8px 12px;
+      margin: 1px 0;
+    }
+
+    QMenu::item:selected {
+      background: @button_hover_bg;
+      color: @text_primary;
+    }
+
+    QMenu::item:pressed {
+      background: @window_chrome_pressed_bg;
+    }
+
+    QMenu::item:disabled {
+      color: @text_disabled;
+      background: transparent;
+    }
+
+    QMenu::separator {
+      height: 1px;
+      background: @menu_separator;
+
+      margin: 6px 8px;
+    }
+
+  )");
+}
+
+
 QString platform_visual_style_template() {
 #ifdef Q_OS_LINUX
   // Linux follows GNOME/Adwaita semantics.
   return adwaita_refinement_style_template() +
-         gnome_headerbar_style_template();
+         gnome_headerbar_style_template() +
+         gnome_menu_style_template();
 #else
   // Windows/macOS keep their native window chrome. Shared Lienzo
   // refinements remain active while dedicated platform styles are built.
