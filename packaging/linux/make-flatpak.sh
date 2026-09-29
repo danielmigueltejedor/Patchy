@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Builds the self-hosted Flatpak bundle: build/package/Patchy-<version>.flatpak
+# Builds the self-hosted Flatpak bundle: build/package/Lienzo-<version>.flatpak
 # Prerequisites (one-time):
 #   sudo apt-get install -y flatpak flatpak-builder
 #   flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 #   flatpak install -y flathub org.kde.Platform//6.8 org.kde.Sdk//6.8
-# Users install the produced bundle with:  flatpak install --user ./Patchy-<version>.flatpak
+# Users install the produced bundle with:  flatpak install --user ./Lienzo-<version>.flatpak
 # (the README one-liner adds the Flathub user remote first; see README.md here).
 set -euo pipefail
 cd "$(dirname "$0")"
 
-APP_ID=com.rtsoft.patchy
+APP_ID=com.nodalix.lienzo
 ROOT=../..
 BUILD_DIR="$ROOT/build/flatpak"
 REPO_DIR="$ROOT/build/flatpak-repo"
@@ -24,7 +24,7 @@ JOBS=$(( $(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 5) - 4 ))
 [ "$JOBS" -ge 1 ] || JOBS=1
 # Delete ALL previous bundles up front (not just this version's): if the build fails,
 # nothing stale remains for the newest-file upload script to pick up by accident.
-rm -f "$PACKAGE_DIR"/Patchy-*.flatpak
+rm -f "$PACKAGE_DIR"/Lienzo-*.flatpak
 nice -n 10 flatpak-builder --jobs="$JOBS" --force-clean --repo="$REPO_DIR" "$BUILD_DIR" "flatpak/$APP_ID.yml"
 
 # Proves the sandboxed app runs with no display before any bundle exists. The Qt
@@ -32,7 +32,7 @@ nice -n 10 flatpak-builder --jobs="$JOBS" --force-clean --repo="$REPO_DIR" "$BUI
 # this is the one check that the runtime still ships it and that --headless works
 # inside the sandbox. flatpak-builder --run uses the build directory the bundle is
 # exported from, so nothing is installed on the build machine. --headless never
-# forwards to a running Patchy; PATCHY_SETTINGS_DIR keeps the run out of the real
+# forwards to a running Lienzo; PATCHY_SETTINGS_DIR keeps the run out of the real
 # settings; the temp directory lives under $HOME because that is what the sandbox
 # can see. The same check runs in the Windows and macOS packagers.
 echo "== headless smoke check (the sandboxed app must run with no display) =="
@@ -63,5 +63,5 @@ timeout 180 flatpak-builder --run "$BUILD_DIR" "flatpak/$APP_ID.yml" patchy-mcp 
 # with no Flathub remote fails with "requires the runtime ... which was not found"
 # (GitHub issue 14, CachyOS with no preconfigured remotes).
 flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo \
-  "$REPO_DIR" "$PACKAGE_DIR/Patchy-$VERSION.flatpak" "$APP_ID"
-echo "Bundle written: $PACKAGE_DIR/Patchy-$VERSION.flatpak"
+  "$REPO_DIR" "$PACKAGE_DIR/Lienzo-$VERSION.flatpak" "$APP_ID"
+echo "Bundle written: $PACKAGE_DIR/Lienzo-$VERSION.flatpak"
