@@ -19,6 +19,16 @@ void on_quit(
 void on_activate(
     GApplication* application,
     gpointer) {
+  if (auto* display = gdk_display_get_default();
+      display != nullptr) {
+    GtkIconTheme* icons =
+        gtk_icon_theme_get_for_display(display);
+
+    gtk_icon_theme_add_search_path(
+        icons,
+        LIENZO_GNOME_ICON_ROOT);
+  }
+
   GtkWindow* window =
       create_main_window(
           ADW_APPLICATION(application));

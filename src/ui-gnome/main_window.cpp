@@ -1,6 +1,10 @@
 #include "ui-gnome/main_window.hpp"
 
 #include "ui-gnome/primary_menu.hpp"
+#include "ui-gnome/preferences_dialog.hpp"
+#include "ui-gnome/new_document_dialog.hpp"
+#include "ui-gnome/tool_palette.hpp"
+#include "ui-gnome/workspace.hpp"
 
 #include "core/document.hpp"
 #include "formats/bmp_document_io.hpp"
@@ -25,6 +29,7 @@ struct WindowContext {
   GtkWindow* window = nullptr;
   AdwToastOverlay* toast_overlay = nullptr;
   std::unique_ptr<patchy::Document> document;
+  Tool current_tool{Tool::Brush};
 };
 
 void show_toast(WindowContext* context, const char* text) {
@@ -70,95 +75,32 @@ std::unique_ptr<patchy::Document> load_document(
       "Formato todavía no conectado al frontend GNOME");
 }
 
-GtkWidget* create_document_view(
-    const patchy::Document& document) {
-  std::vector<std::uint8_t> alpha;
-
-  patchy::PixelBuffer rgb =
-      patchy::Compositor{}.flatten_rgb8(
-          document,
-          &alpha);
-
-  if (rgb.empty()) {
-    throw std::runtime_error(
-        "El documento no produjo una imagen renderizable");
-  }
-
-  const int width = rgb.width();
-  const int height = rgb.height();
-
-  std::vector<std::uint8_t> rgba(
-      static_cast<std::size_t>(width) *
-      static_cast<std::size_t>(height) *
-      4);
-
-  for (int y = 0; y < height; ++y) {
-    for (int x = 0; x < width; ++x) {
-      const auto* source = rgb.pixel(x, y);
-
-      const std::size_t pixel_index =
-          static_cast<std::size_t>(y) *
-              static_cast<std::size_t>(width) +
-          static_cast<std::size_t>(x);
-
-      const std::size_t target =
-          pixel_index * 4;
-
-      rgba[target + 0] = source[0];
-      rgba[target + 1] = source[1];
-      rgba[target + 2] = source[2];
-
-      rgba[target + 3] =
-          alpha.size() > pixel_index
-              ? alpha[pixel_index]
-              : 255;
-    }
-  }
-
-  GBytes* bytes =
-      g_bytes_new(
-          rgba.data(),
-          rgba.size());
-
-  GdkTexture* texture =
-      gdk_memory_texture_new(
-          width,
-          height,
-          GDK_MEMORY_R8G8B8A8,
-          bytes,
-          static_cast<gsize>(width) * 4);
-
-  g_bytes_unref(bytes);
-
-  GtkWidget* picture =
-      gtk_picture_new_for_paintable(
-          GDK_PAINTABLE(texture));
-
-  g_object_unref(texture);
-
-  gtk_picture_set_content_fit(
-      GTK_PICTURE(picture),
-      GTK_CONTENT_FIT_CONTAIN);
-
-  gtk_widget_set_hexpand(picture, TRUE);
-  gtk_widget_set_vexpand(picture, TRUE);
-
-  return picture;
-}
-
 void present_document(
     WindowContext* context,
     std::unique_ptr<patchy::Document> document,
     const std::string& title) {
-  GtkWidget* view =
-      create_document_view(*document);
-
   context->document =
       std::move(document);
 
+  GtkWidget* workspace =
+      create_workspace(
+          *context->document,
+          context->current_tool,
+          [context](Tool tool) {
+            context->current_tool = tool;
+
+            std::string message =
+                std::string("Herramienta: ") +
+                tool_name(tool);
+
+            show_toast(
+                context,
+                message.c_str());
+          });
+
   adw_toast_overlay_set_child(
       context->toast_overlay,
-      view);
+      workspace);
 
   gtk_window_set_title(
       context->window,
@@ -172,33 +114,73 @@ void on_new_document(
   auto* context =
       static_cast<WindowContext*>(data);
 
-  try {
-    auto document =
-        std::make_unique<patchy::Document>(
-            1600,
-            900,
-            patchy::PixelFormat::rgb8());
+  present_new_document_dialog(
+      GTK_WIDGET(context->window),
+      [context](const NewDocumentSettings& settings) {
+        try {
+          auto document =
+              std::make_unique<patchy::Document>(
+                  settings.width,
+                  settings.height,
+                  patchy::PixelFormat::rgb8());
 
-    patchy::PixelBuffer pixels(
-        1600,
-        900,
-        patchy::PixelFormat::rgb8());
+          document->print_settings().horizontal_ppi =
+              settings.resolution_ppi;
 
-    pixels.clear(255);
+          document->print_settings().vertical_ppi =
+              settings.resolution_ppi;
 
-    document->add_pixel_layer(
-        "Fondo",
-        std::move(pixels));
+          patchy::PixelFormat background_format =
+              patchy::PixelFormat::rgb8();
 
-    present_document(
-        context,
-        std::move(document),
-        "Sin título — Lienzo");
-  } catch (const std::exception& error) {
-    show_toast(
-        context,
-        error.what());
-  }
+          std::uint8_t background_value = 255;
+
+          if (
+              settings.background ==
+              NewDocumentBackground::Black) {
+            background_value = 0;
+          } else if (
+              settings.background ==
+              NewDocumentBackground::Transparent) {
+            background_format =
+                patchy::PixelFormat::rgba8();
+
+            background_value = 0;
+          }
+
+          patchy::PixelBuffer background(
+              settings.width,
+              settings.height,
+              background_format);
+
+          background.clear(
+              background_value);
+
+          document->add_pixel_layer(
+              "Background",
+              std::move(background));
+
+          patchy::PixelBuffer paint(
+              settings.width,
+              settings.height,
+              patchy::PixelFormat::rgba8());
+
+          paint.clear(0);
+
+          document->add_pixel_layer(
+              "Paint Layer",
+              std::move(paint));
+
+          present_document(
+              context,
+              std::move(document),
+              "Sin título — Lienzo");
+        } catch (const std::exception& error) {
+          show_toast(
+              context,
+              error.what());
+        }
+      });
 }
 
 void on_open_finished(
@@ -294,9 +276,11 @@ void on_preferences(
     GSimpleAction*,
     GVariant*,
     gpointer data) {
-  show_toast(
-      static_cast<WindowContext*>(data),
-      "Preferencias: pendiente de migrar");
+  auto* context =
+      static_cast<WindowContext*>(data);
+
+  present_preferences_dialog(
+      GTK_WIDGET(context->window));
 }
 
 void on_about(
@@ -312,7 +296,7 @@ void on_about(
   g_object_set(
       dialog,
       "application-name", "Lienzo",
-      "application-icon", "image-x-generic-symbolic",
+      "application-icon", "com.getnodalia.Lienzo",
       "developer-name", "Daniel Miguel Tejedor",
       "version", "GNOME development frontend",
       "comments", "Editor de imágenes con frontend nativo GNOME",
@@ -417,7 +401,7 @@ GtkWindow* create_main_window(
 
   adw_status_page_set_icon_name(
       ADW_STATUS_PAGE(status_page),
-      "image-x-generic-symbolic");
+      "com.getnodalia.Lienzo");
 
   adw_status_page_set_title(
       ADW_STATUS_PAGE(status_page),

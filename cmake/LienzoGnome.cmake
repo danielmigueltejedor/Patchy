@@ -36,6 +36,11 @@ if(UNIX AND NOT APPLE AND NOT EMSCRIPTEN)
         src/ui-gnome/application.cpp
         src/ui-gnome/main_window.cpp
         src/ui-gnome/primary_menu.cpp
+        src/ui-gnome/new_document_dialog.cpp
+        src/ui-gnome/tool_palette.cpp
+        src/ui-gnome/workspace.cpp
+        src/ui-gnome/canvas.cpp
+        src/ui-gnome/preferences_dialog.cpp
       )
 
       set_target_properties(
@@ -48,6 +53,29 @@ if(UNIX AND NOT APPLE AND NOT EMSCRIPTEN)
         lienzo_gnome
         PRIVATE
           "${PROJECT_SOURCE_DIR}/src"
+      )
+
+      set(
+        LIENZO_GNOME_ICON_ROOT
+        "${CMAKE_BINARY_DIR}/lienzo-gnome-icons"
+      )
+
+      file(
+        MAKE_DIRECTORY
+        "${LIENZO_GNOME_ICON_ROOT}/hicolor/256x256/apps"
+      )
+
+      configure_file(
+        "${PROJECT_SOURCE_DIR}/src/ui/icons/lienzo-app.png"
+        "${LIENZO_GNOME_ICON_ROOT}/hicolor/256x256/apps/com.getnodalia.Lienzo.png"
+        COPYONLY
+      )
+
+      target_compile_definitions(
+        lienzo_gnome
+        PRIVATE
+          LIENZO_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+          LIENZO_GNOME_ICON_ROOT="${LIENZO_GNOME_ICON_ROOT}"
       )
 
       target_link_libraries(
