@@ -57,6 +57,8 @@ if(UNIX AND NOT APPLE AND NOT EMSCRIPTEN)
           PkgConfig::LIENZO_ADWAITA
           patchy_core
           patchy_render
+          patchy_psd
+          patchy_formats
       )
 
       patchy_configure_target(lienzo_gnome)

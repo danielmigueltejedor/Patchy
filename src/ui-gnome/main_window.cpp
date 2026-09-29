@@ -2,7 +2,20 @@
 
 #include "ui-gnome/primary_menu.hpp"
 
-#include <gio/gio.h>
+#include "core/document.hpp"
+#include "formats/bmp_document_io.hpp"
+#include "formats/pcx_document_io.hpp"
+#include "psd/psd_document_io.hpp"
+#include "render/compositor.hpp"
+
+#include <algorithm>
+#include <cctype>
+#include <exception>
+#include <filesystem>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <vector>
 
 namespace lienzo::gnome {
 
@@ -11,49 +24,245 @@ namespace {
 struct WindowContext {
   GtkWindow* window = nullptr;
   AdwToastOverlay* toast_overlay = nullptr;
+  std::unique_ptr<patchy::Document> document;
 };
 
 void show_toast(WindowContext* context, const char* text) {
-  auto* toast = adw_toast_new(text);
-  adw_toast_overlay_add_toast(context->toast_overlay, toast);
+  adw_toast_overlay_add_toast(
+      context->toast_overlay,
+      adw_toast_new(text));
+}
+
+std::string extension_lower(const std::filesystem::path& path) {
+  std::string ext = path.extension().string();
+
+  std::transform(
+      ext.begin(),
+      ext.end(),
+      ext.begin(),
+      [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+      });
+
+  return ext;
+}
+
+std::unique_ptr<patchy::Document> load_document(
+    const std::filesystem::path& path) {
+  const std::string ext = extension_lower(path);
+
+  if (ext == ".psd" || ext == ".psb") {
+    return std::make_unique<patchy::Document>(
+        patchy::psd::DocumentIo::read_file(path));
+  }
+
+  if (ext == ".bmp") {
+    return std::make_unique<patchy::Document>(
+        patchy::bmp::DocumentIo::read_file(path));
+  }
+
+  if (ext == ".pcx") {
+    return std::make_unique<patchy::Document>(
+        patchy::pcx::DocumentIo::read_file(path));
+  }
+
+  throw std::runtime_error(
+      "Formato todavía no conectado al frontend GNOME");
+}
+
+GtkWidget* create_document_view(
+    const patchy::Document& document) {
+  std::vector<std::uint8_t> alpha;
+
+  patchy::PixelBuffer rgb =
+      patchy::Compositor{}.flatten_rgb8(
+          document,
+          &alpha);
+
+  if (rgb.empty()) {
+    throw std::runtime_error(
+        "El documento no produjo una imagen renderizable");
+  }
+
+  const int width = rgb.width();
+  const int height = rgb.height();
+
+  std::vector<std::uint8_t> rgba(
+      static_cast<std::size_t>(width) *
+      static_cast<std::size_t>(height) *
+      4);
+
+  for (int y = 0; y < height; ++y) {
+    for (int x = 0; x < width; ++x) {
+      const auto* source = rgb.pixel(x, y);
+
+      const std::size_t pixel_index =
+          static_cast<std::size_t>(y) *
+              static_cast<std::size_t>(width) +
+          static_cast<std::size_t>(x);
+
+      const std::size_t target =
+          pixel_index * 4;
+
+      rgba[target + 0] = source[0];
+      rgba[target + 1] = source[1];
+      rgba[target + 2] = source[2];
+
+      rgba[target + 3] =
+          alpha.size() > pixel_index
+              ? alpha[pixel_index]
+              : 255;
+    }
+  }
+
+  GBytes* bytes =
+      g_bytes_new(
+          rgba.data(),
+          rgba.size());
+
+  GdkTexture* texture =
+      gdk_memory_texture_new(
+          width,
+          height,
+          GDK_MEMORY_R8G8B8A8,
+          bytes,
+          static_cast<gsize>(width) * 4);
+
+  g_bytes_unref(bytes);
+
+  GtkWidget* picture =
+      gtk_picture_new_for_paintable(
+          GDK_PAINTABLE(texture));
+
+  g_object_unref(texture);
+
+  gtk_picture_set_content_fit(
+      GTK_PICTURE(picture),
+      GTK_CONTENT_FIT_CONTAIN);
+
+  gtk_widget_set_hexpand(picture, TRUE);
+  gtk_widget_set_vexpand(picture, TRUE);
+
+  return picture;
+}
+
+void present_document(
+    WindowContext* context,
+    std::unique_ptr<patchy::Document> document,
+    const std::string& title) {
+  GtkWidget* view =
+      create_document_view(*document);
+
+  context->document =
+      std::move(document);
+
+  adw_toast_overlay_set_child(
+      context->toast_overlay,
+      view);
+
+  gtk_window_set_title(
+      context->window,
+      title.c_str());
 }
 
 void on_new_document(
     GSimpleAction*,
     GVariant*,
     gpointer data) {
-  auto* context = static_cast<WindowContext*>(data);
-  show_toast(context, "Nuevo documento: conexion con el editor pendiente");
+  auto* context =
+      static_cast<WindowContext*>(data);
+
+  try {
+    auto document =
+        std::make_unique<patchy::Document>(
+            1600,
+            900,
+            patchy::PixelFormat::rgb8());
+
+    patchy::PixelBuffer pixels(
+        1600,
+        900,
+        patchy::PixelFormat::rgb8());
+
+    pixels.clear(255);
+
+    document->add_pixel_layer(
+        "Fondo",
+        std::move(pixels));
+
+    present_document(
+        context,
+        std::move(document),
+        "Sin título — Lienzo");
+  } catch (const std::exception& error) {
+    show_toast(
+        context,
+        error.what());
+  }
 }
 
 void on_open_finished(
     GObject* source,
     GAsyncResult* result,
     gpointer data) {
-  auto* context = static_cast<WindowContext*>(data);
+  auto* context =
+      static_cast<WindowContext*>(data);
 
   GError* error = nullptr;
 
-  GFile* file = gtk_file_dialog_open_finish(
-      GTK_FILE_DIALOG(source),
-      result,
-      &error);
+  GFile* file =
+      gtk_file_dialog_open_finish(
+          GTK_FILE_DIALOG(source),
+          result,
+          &error);
 
   if (file == nullptr) {
-    g_clear_error(&error);
+    if (error != nullptr) {
+      if (!g_error_matches(
+              error,
+              G_IO_ERROR,
+              G_IO_ERROR_CANCELLED)) {
+        show_toast(
+            context,
+            error->message);
+      }
+
+      g_error_free(error);
+    }
+
     return;
   }
 
-  char* path = g_file_get_parse_name(file);
+  char* raw_path =
+      g_file_get_path(file);
 
-  char* message = g_strdup_printf(
-      "Abrir: %s",
-      path);
+  if (raw_path == nullptr) {
+    show_toast(
+        context,
+        "Solo se admiten archivos locales por ahora");
 
-  show_toast(context, message);
+    g_object_unref(file);
+    return;
+  }
 
-  g_free(message);
-  g_free(path);
+  try {
+    const std::filesystem::path path(
+        raw_path);
+
+    auto document =
+        load_document(path);
+
+    present_document(
+        context,
+        std::move(document),
+        path.filename().string());
+  } catch (const std::exception& error) {
+    show_toast(
+        context,
+        error.what());
+  }
+
+  g_free(raw_path);
   g_object_unref(file);
 }
 
@@ -61,13 +270,15 @@ void on_open(
     GSimpleAction*,
     GVariant*,
     gpointer data) {
-  auto* context = static_cast<WindowContext*>(data);
+  auto* context =
+      static_cast<WindowContext*>(data);
 
-  GtkFileDialog* dialog = gtk_file_dialog_new();
+  GtkFileDialog* dialog =
+      gtk_file_dialog_new();
 
   gtk_file_dialog_set_title(
       dialog,
-      "Abrir imagen");
+      "Abrir documento");
 
   gtk_file_dialog_open(
       dialog,
@@ -83,18 +294,17 @@ void on_preferences(
     GSimpleAction*,
     GVariant*,
     gpointer data) {
-  auto* context = static_cast<WindowContext*>(data);
-
   show_toast(
-      context,
-      "Preferencias GNOME: siguiente fase");
+      static_cast<WindowContext*>(data),
+      "Preferencias: pendiente de migrar");
 }
 
 void on_about(
     GSimpleAction*,
     GVariant*,
     gpointer data) {
-  auto* context = static_cast<WindowContext*>(data);
+  auto* context =
+      static_cast<WindowContext*>(data);
 
   AdwDialog* dialog =
       adw_about_dialog_new();
@@ -105,7 +315,7 @@ void on_about(
       "application-icon", "image-x-generic-symbolic",
       "developer-name", "Daniel Miguel Tejedor",
       "version", "GNOME development frontend",
-      "comments", "Editor de imagenes con frontend nativo GNOME",
+      "comments", "Editor de imágenes con frontend nativo GNOME",
       "website", "https://github.com/danielmigueltejedor/lienzo",
       nullptr);
 
@@ -120,7 +330,9 @@ void add_window_action(
     GCallback callback,
     WindowContext* context) {
   GSimpleAction* action =
-      g_simple_action_new(name, nullptr);
+      g_simple_action_new(
+          name,
+          nullptr);
 
   g_signal_connect(
       action,
@@ -152,9 +364,11 @@ GtkWindow* create_main_window(
       1200,
       760);
 
-  auto* context = new WindowContext{
-      GTK_WINDOW(window),
-      nullptr};
+  auto* context =
+      new WindowContext{
+          GTK_WINDOW(window),
+          nullptr,
+          nullptr};
 
   g_object_set_data_full(
       G_OBJECT(window),
@@ -186,18 +400,9 @@ GtkWindow* create_main_window(
       GTK_MENU_BUTTON(menu_button),
       "open-menu-symbolic");
 
-  gtk_widget_set_tooltip_text(
-      menu_button,
-      "Menu principal");
-
-  GMenuModel* primary_menu =
-      create_primary_menu();
-
   gtk_menu_button_set_menu_model(
       GTK_MENU_BUTTON(menu_button),
-      primary_menu);
-
-  g_object_unref(primary_menu);
+      create_primary_menu());
 
   adw_header_bar_pack_end(
       ADW_HEADER_BAR(header_bar),
@@ -220,7 +425,7 @@ GtkWindow* create_main_window(
 
   adw_status_page_set_description(
       ADW_STATUS_PAGE(status_page),
-      "Editor de imagenes");
+      "Editor de imágenes");
 
   GtkWidget* actions =
       gtk_box_new(
