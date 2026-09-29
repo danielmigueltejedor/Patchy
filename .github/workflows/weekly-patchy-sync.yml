@@ -7,8 +7,6 @@ on:
 
 permissions:
   contents: write
-  pull-requests: write
-  issues: write
 
 concurrency:
   group: weekly-patchy-sync
@@ -51,12 +49,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          : > /tmp/patchy-accepted.txt
+          : > /tmp/patchy-manual.txt
+          : > /tmp/patchy-conflicts.txt
+          : > /tmp/patchy-candidates.txt
+
           git cherry main "patchy-source/$UPSTREAM_BRANCH" |
             awk '$1 == "+" { print $2 }' > /tmp/patchy-candidates.txt
 
           count="$(wc -l < /tmp/patchy-candidates.txt | tr -d " ")"
           echo "count=$count" >> "$GITHUB_OUTPUT"
-          echo "Unique Patchy commits detected: $count" >> "$GITHUB_STEP_SUMMARY"
+
+          {
+            echo "## Patchy sync discovery"
+            echo
+            echo "Unique Patchy commits detected: **$count**"
+          } >> "$GITHUB_STEP_SUMMARY"
 
           if [ "$count" -gt "$MAX_COMMITS_PER_RUN" ]; then
             echo "Too many upstream commits ($count > $MAX_COMMITS_PER_RUN)." >&2
@@ -69,10 +78,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
-          : > /tmp/patchy-accepted.txt
-          : > /tmp/patchy-manual.txt
-          : > /tmp/patchy-conflicts.txt
 
           protected_re='^(.github/|README\.md$|AGENTS\.md$|LICENSE$|NOTICE-THIRD-PARTY\.md$|latest_version\.json$|packaging/|scripts/release/|scripts/remote/|docs/release-process\.md$)'
 
@@ -130,9 +135,14 @@ jobs:
           echo "manual=$manual" >> "$GITHUB_OUTPUT"
           echo "conflicts=$conflicts" >> "$GITHUB_OUTPUT"
 
-          echo "Auto-applied: $accepted" >> "$GITHUB_STEP_SUMMARY"
-          echo "Manual review: $manual" >> "$GITHUB_STEP_SUMMARY"
-          echo "Cherry-pick conflicts: $conflicts" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo
+            echo "### Classification"
+            echo
+            echo "- Auto-applied: **$accepted**"
+            echo "- Manual review: **$manual**"
+            echo "- Cherry-pick conflicts: **$conflicts**"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Set up Python
         if: steps.apply.outputs.accepted != '0'
@@ -168,19 +178,128 @@ jobs:
             -m qtimageformats qtpdf \
             -O .deps/Qt
 
-      - name: Configure Lienzo
+      - name: Prepare Lienzo main baseline
         if: steps.apply.outputs.accepted != '0'
-        run: cmake --preset linux-release
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline="$RUNNER_TEMP/lienzo-baseline"
+          rm -rf "$baseline"
+          git worktree add --detach "$baseline" main
+          ln -s "$GITHUB_WORKSPACE/.deps" "$baseline/.deps"
 
-      - name: Build Lienzo
+      - name: Configure and build Lienzo main baseline
         if: steps.apply.outputs.accepted != '0'
-        run: cmake --build --preset linux-release -j 2
+        working-directory: ${{ runner.temp }}/lienzo-baseline
+        run: |
+          cmake --preset linux-release
+          cmake --build --preset linux-release -j 2
 
-      - name: Run full regression suite
+      - name: Run Lienzo main baseline tests
         if: steps.apply.outputs.accepted != '0'
+        id: baseline
+        working-directory: ${{ runner.temp }}/lienzo-baseline
         env:
           QT_QPA_PLATFORM: offscreen
-        run: ctest --test-dir build/linux-release --output-on-failure -j 2
+        shell: bash
+        run: |
+          set -uo pipefail
+          set +e
+          ctest --test-dir build/linux-release --output-on-failure -j 2 2>&1 | tee /tmp/lienzo-baseline-tests.log
+          code="${PIPESTATUS[0]}"
+          set -e
+
+          printf '%s\n' "$code" > /tmp/lienzo-baseline-exit.txt
+
+          sed -nE 's/^\[FAIL\] ([^:]+):.*/\1/p' /tmp/lienzo-baseline-tests.log |
+            sort -u > /tmp/lienzo-baseline-failures.txt
+
+          sed -nE 's/.*Test #[0-9]+: ([^ ]+).*\*\*\*(Failed|Timeout|Exception).*/\1/p'             /tmp/lienzo-baseline-tests.log |
+            sort -u > /tmp/lienzo-baseline-ctest-failures.txt
+
+          echo "Baseline ctest exit: $code"
+          echo "Baseline assertion failures: $(wc -l < /tmp/lienzo-baseline-failures.txt)"
+          exit 0
+
+      - name: Configure and build candidate Lienzo
+        if: steps.apply.outputs.accepted != '0'
+        run: |
+          cmake --preset linux-release
+          cmake --build --preset linux-release -j 2
+
+      - name: Run candidate tests
+        if: steps.apply.outputs.accepted != '0'
+        id: candidate
+        env:
+          QT_QPA_PLATFORM: offscreen
+        shell: bash
+        run: |
+          set -uo pipefail
+          set +e
+          ctest --test-dir build/linux-release --output-on-failure -j 2 2>&1 | tee /tmp/lienzo-candidate-tests.log
+          code="${PIPESTATUS[0]}"
+          set -e
+
+          printf '%s\n' "$code" > /tmp/lienzo-candidate-exit.txt
+
+          sed -nE 's/^\[FAIL\] ([^:]+):.*/\1/p' /tmp/lienzo-candidate-tests.log |
+            sort -u > /tmp/lienzo-candidate-failures.txt
+
+          sed -nE 's/.*Test #[0-9]+: ([^ ]+).*\*\*\*(Failed|Timeout|Exception).*/\1/p'             /tmp/lienzo-candidate-tests.log |
+            sort -u > /tmp/lienzo-candidate-ctest-failures.txt
+
+          echo "Candidate ctest exit: $code"
+          echo "Candidate assertion failures: $(wc -l < /tmp/lienzo-candidate-failures.txt)"
+          exit 0
+
+      - name: Reject new regressions
+        if: steps.apply.outputs.accepted != '0'
+        id: compare
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          comm -13             /tmp/lienzo-baseline-failures.txt             /tmp/lienzo-candidate-failures.txt             > /tmp/lienzo-new-failures.txt
+
+          comm -13             /tmp/lienzo-baseline-ctest-failures.txt             /tmp/lienzo-candidate-ctest-failures.txt             > /tmp/lienzo-new-ctest-failures.txt
+
+          : > /tmp/lienzo-critical-errors.txt
+          grep -Ei             'Segmentation fault|core dumped|AddressSanitizer|heap-use-after-free|double free|malloc.*corrupt|terminate called'             /tmp/lienzo-candidate-tests.log             > /tmp/lienzo-critical-errors.txt || true
+
+          new_assertions="$(wc -l < /tmp/lienzo-new-failures.txt | tr -d " ")"
+          new_ctest="$(wc -l < /tmp/lienzo-new-ctest-failures.txt | tr -d " ")"
+          critical="$(wc -l < /tmp/lienzo-critical-errors.txt | tr -d " ")"
+
+          {
+            echo
+            echo "### Regression comparison"
+            echo
+            echo "- New assertion failures: **$new_assertions**"
+            echo "- New failing CTest targets: **$new_ctest**"
+            echo "- Critical crash signatures: **$critical**"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$new_assertions" -ne 0 ] || [ "$new_ctest" -ne 0 ] || [ "$critical" -ne 0 ]; then
+            echo "Patchy changes introduced regressions not present on Lienzo main." >&2
+            echo "safe=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          echo "safe=true" >> "$GITHUB_OUTPUT"
+          echo "No new regressions relative to Lienzo main." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Recheck Lienzo identity before integration
+        if: steps.apply.outputs.accepted != '0' && steps.compare.outputs.safe == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f src/ui/icons/lienzo-app.png
+          test -f packaging/linux/com.nodalix.lienzo.desktop
+          grep -q '^Name=Lienzo$' packaging/linux/com.nodalix.lienzo.desktop
+          grep -q '^Icon=com.nodalix.lienzo$' packaging/linux/com.nodalix.lienzo.desktop
+          grep -q 'com\.nodalix\.lienzo' CMakeLists.txt
+          grep -q 'lienzo-app\.png' src/ui/icons.qrc
+          ! grep -Eq 'MACOSX_BUNDLE_GUI_IDENTIFIER "com\.rtsoft\.patchy"' CMakeLists.txt
 
       - name: Create sync report
         if: always() && steps.discover.outputs.count != '0'
@@ -194,94 +313,77 @@ jobs:
             echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             echo
 
-            echo "## Accepted"
+            echo "## Accepted for automated validation"
             if [ -s /tmp/patchy-accepted.txt ]; then cat /tmp/patchy-accepted.txt; else echo "None."; fi
             echo
             echo "## Manual review"
             if [ -s /tmp/patchy-manual.txt ]; then cat /tmp/patchy-manual.txt; else echo "None."; fi
             echo
-            echo "## Conflicts"
+            echo "## Cherry-pick conflicts"
             if [ -s /tmp/patchy-conflicts.txt ]; then cat /tmp/patchy-conflicts.txt; else echo "None."; fi
+            echo
+
+            if [ -f /tmp/lienzo-new-failures.txt ]; then
+              echo "## New assertion failures"
+              if [ -s /tmp/lienzo-new-failures.txt ]; then cat /tmp/lienzo-new-failures.txt; else echo "None."; fi
+              echo
+            fi
+
+            if [ -f /tmp/lienzo-new-ctest-failures.txt ]; then
+              echo "## New failing CTest targets"
+              if [ -s /tmp/lienzo-new-ctest-failures.txt ]; then cat /tmp/lienzo-new-ctest-failures.txt; else echo "None."; fi
+              echo
+            fi
           } > /tmp/patchy-sync-report.md
 
           cat /tmp/patchy-sync-report.md >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Push validated sync branch
-        if: steps.apply.outputs.accepted != '0' && success()
-        run: git push --force-with-lease origin "$SYNC_BRANCH"
+      - name: Upload sync report
+        if: always() && steps.discover.outputs.count != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: patchy-sync-report
+          path: |
+            /tmp/patchy-sync-report.md
+            /tmp/patchy-candidates.txt
+            /tmp/patchy-accepted.txt
+            /tmp/patchy-manual.txt
+            /tmp/patchy-conflicts.txt
+            /tmp/lienzo-baseline-failures.txt
+            /tmp/lienzo-candidate-failures.txt
+            /tmp/lienzo-new-failures.txt
+          if-no-files-found: ignore
+          retention-days: 30
 
-      - name: Open or update sync pull request
-        if: steps.apply.outputs.accepted != '0' && success()
-        id: pr
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Integrate validated Patchy commits into main
+        if: steps.apply.outputs.accepted != '0' && steps.compare.outputs.safe == 'true'
         shell: bash
         run: |
           set -euo pipefail
 
-          existing="$(gh pr list \
-            --repo "$GITHUB_REPOSITORY" \
-            --head "$SYNC_BRANCH" \
-            --base main \
-            --state open \
-            --json number \
-            --jq '.[0].number // empty')"
+          git fetch origin main
 
-          if [ -z "$existing" ]; then
-            url="$(gh pr create \
-              --repo "$GITHUB_REPOSITORY" \
-              --head "$SYNC_BRANCH" \
-              --base main \
-              --title "chore: sync validated Patchy improvements" \
-              --body-file /tmp/patchy-sync-report.md)"
-            number="$(printf '%s' "$url" | awk -F/ '{print $NF}')"
-          else
-            number="$existing"
-            gh pr edit "$number" \
-              --repo "$GITHUB_REPOSITORY" \
-              --title "chore: sync validated Patchy improvements" \
-              --body-file /tmp/patchy-sync-report.md
+          current_main="$(git rev-parse origin/main)"
+          starting_main="$(git rev-parse main)"
+
+          if [ "$current_main" != "$starting_main" ]; then
+            echo "Lienzo main changed while this workflow was validating. Nothing will be pushed." >&2
+            exit 1
           fi
 
-          echo "number=$number" >> "$GITHUB_OUTPUT"
+          git push origin HEAD:main
 
-      - name: Merge validated upstream sync
-        if: steps.pr.outputs.number != '' && success()
-        env:
-          GH_TOKEN: ${{ github.token }}
+          {
+            echo
+            echo "### Integration"
+            echo
+            echo "Validated Patchy commits were fast-forwarded into **main**."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: No auto-safe Patchy commits
+        if: steps.discover.outputs.count != '0' && steps.apply.outputs.accepted == '0'
         run: |
-          gh pr merge "${{ steps.pr.outputs.number }}" \
-            --repo "$GITHUB_REPOSITORY" \
-            --merge \
-            --delete-branch
-
-      - name: Open manual-review issue when needed
-        if: always() && steps.discover.outputs.count != '0' && (steps.apply.outputs.manual != '0' || steps.apply.outputs.conflicts != '0' || failure())
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          title="Patchy sync needs manual review"
-          existing="$(gh issue list \
-            --repo "$GITHUB_REPOSITORY" \
-            --state open \
-            --search "$title in:title" \
-            --json number,title \
-            --jq '.[] | select(.title == "Patchy sync needs manual review") | .number' \
-            | head -n1)"
-
-          if [ -n "$existing" ]; then
-            gh issue comment "$existing" \
-              --repo "$GITHUB_REPOSITORY" \
-              --body-file /tmp/patchy-sync-report.md
-          else
-            gh issue create \
-              --repo "$GITHUB_REPOSITORY" \
-              --title "$title" \
-              --body-file /tmp/patchy-sync-report.md
-          fi
+          echo "Patchy has new commits, but none qualified for automatic integration." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Nothing new upstream
         if: steps.discover.outputs.count == '0'
