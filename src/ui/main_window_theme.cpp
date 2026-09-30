@@ -2933,11 +2933,9 @@ QString gnome_primary_popover_style_template() {
   return QStringLiteral(R"(
 
     QFrame#gnomePrimaryMenuPopover {
-      background-color: @menu_bg;
-      color: @text_primary;
-      border: 1px solid @menu_border;
-      border-radius: 10px;
-      padding: 4px;
+      background: transparent;
+      border: 0;
+      padding: 0;
     }
 
     QWidget#gnomePrimaryMenuPage,

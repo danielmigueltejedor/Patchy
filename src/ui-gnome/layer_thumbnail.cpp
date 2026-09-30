@@ -172,13 +172,44 @@ GtkWidget* picture_from_pixels(
         rgba[i + 2] = value;
         rgba[i + 3] = 255;
       } else {
-        rgba[i + 0] = source[0];
+        const std::uint8_t alpha =
+            channels >= 4
+                ? source[3]
+                : 255;
+
+        const bool checker_dark =
+            ((x / 8) + (y / 8)) % 2 == 0;
+
+        const std::uint8_t checker =
+            checker_dark
+                ? 180
+                : 230;
+
+        const double a =
+            alpha / 255.0;
+
+        rgba[i + 0] =
+            static_cast<std::uint8_t>(
+                source[0] * a +
+                checker * (1.0 - a));
+
         rgba[i + 1] =
-            channels >= 2 ? source[1] : source[0];
+            static_cast<std::uint8_t>(
+                (channels >= 2
+                     ? source[1]
+                     : source[0]) *
+                    a +
+                checker * (1.0 - a));
+
         rgba[i + 2] =
-            channels >= 3 ? source[2] : source[0];
-        rgba[i + 3] =
-            channels >= 4 ? source[3] : 255;
+            static_cast<std::uint8_t>(
+                (channels >= 3
+                     ? source[2]
+                     : source[0]) *
+                    a +
+                checker * (1.0 - a));
+
+        rgba[i + 3] = 255;
       }
     }
   }
@@ -229,6 +260,13 @@ GtkWidget* create_mask_thumbnail(
     const patchy::LayerMask& mask) {
   return picture_from_pixels(
       mask.pixels,
+      true);
+}
+
+GtkWidget* create_channel_thumbnail(
+    const patchy::PixelBuffer& pixels) {
+  return picture_from_pixels(
+      pixels,
       true);
 }
 

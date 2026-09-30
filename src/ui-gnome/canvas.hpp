@@ -3,10 +3,12 @@
 #include "core/document.hpp"
 #include "core/pixel_tools.hpp"
 #include "ui-gnome/tool_palette.hpp"
+#include "ui-gnome/tools/text_controller.hpp"
 
 #include <gtk/gtk.h>
 
 #include <functional>
+#include <string>
 
 namespace lienzo::gnome {
 
@@ -39,6 +41,35 @@ struct CanvasView {
   std::function<void()> paste;
 
   std::function<void(int)> set_brush_tip_index;
+
+  std::function<patchy::EditColor()> foreground_color;
+  std::function<patchy::EditColor()> background_color;
+
+  std::function<void(patchy::EditColor)>
+      set_foreground_color;
+
+  std::function<void(patchy::EditColor)>
+      set_background_color;
+
+  std::function<void()> reset_colors;
+  std::function<void()> swap_colors;
+
+  std::function<void()> select_all;
+  std::function<void()> deselect;
+  std::function<void()> invert_selection;
+
+  std::function<bool()> quick_mask_enabled;
+  std::function<void(bool)> set_quick_mask;
+  std::function<void()> toggle_quick_mask;
+
+  std::function<void(std::string)> set_text_family;
+  std::function<void(int)> set_text_size;
+  std::function<void(bool)> set_text_bold;
+  std::function<void(bool)> set_text_italic;
+  std::function<void(TextAlignment)> set_text_alignment;
+
+  std::function<void()> commit_text;
+  std::function<void()> cancel_text;
 };
 
 CanvasView create_canvas_view(

@@ -217,6 +217,92 @@ builtin_brush_tips() {
                         : 0.0;
               })},
       {
+          "Aerógrafo suave",
+          false,
+          patchy::BrushShape::Round,
+          make_tip(
+              0.07,
+              [](double x, double y, int, int) {
+                const double d =
+                    std::sqrt(x * x + y * y);
+
+                return
+                    std::clamp(
+                        1.0 - d * 0.82,
+                        0.0,
+                        1.0) *
+                    0.55;
+              })},
+      {
+          "Salpicadura",
+          false,
+          patchy::BrushShape::Round,
+          make_tip(
+              0.20,
+              [](double x, double y, int px, int py) {
+                if (x * x + y * y > 1.0)
+                  return 0.0;
+
+                const auto n =
+                    hash_noise(
+                        px * 31,
+                        py * 47);
+
+                return n > 0.68
+                    ? 1.0
+                    : 0.0;
+              })},
+      {
+          "Pincel seco",
+          false,
+          patchy::BrushShape::Round,
+          make_tip(
+              0.15,
+              [](double x, double y, int px, int py) {
+                if (x * x + y * y > 1.0)
+                  return 0.0;
+
+                return
+                    hash_noise(
+                        px * 11,
+                        py * 13) >
+                            0.42
+                        ? 0.9
+                        : 0.08;
+              })},
+      {
+          "Plano",
+          false,
+          patchy::BrushShape::Round,
+          make_tip(
+              0.10,
+              [](double x, double y, int, int) {
+                return
+                    std::abs(x) < 0.88 &&
+                            std::abs(y) < 0.34
+                        ? 1.0
+                        : 0.0;
+              })},
+      {
+          "Abanico",
+          false,
+          patchy::BrushShape::Round,
+          make_tip(
+              0.16,
+              [](double x, double y, int px, int) {
+                if (
+                    y < -0.25 ||
+                    y > 0.95 ||
+                    std::abs(x) >
+                        0.9 * (y + 1.0))
+                  return 0.0;
+
+                return
+                    (px % 5) < 2
+                        ? 1.0
+                        : 0.12;
+              })},
+      {
           "Cerdas",
           false,
           patchy::BrushShape::Round,

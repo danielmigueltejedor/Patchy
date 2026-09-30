@@ -483,20 +483,20 @@ class GnomeMenuRowWidget final : public QWidget {
 class GnomePrimaryMenuPopover final : public QFrame {
  public:
   GnomePrimaryMenuPopover(QWidget* action_root, QMenuBar* menu_bar, QWidget* parent)
-      : QFrame(parent, Qt::Popup | Qt::FramelessWindowHint),
+      : QFrame(parent, Qt::Popup | Qt::FramelessWindowHint | Qt::NoDropShadowWindowHint),
         action_root_(action_root),
         menu_bar_(menu_bar) {
     setObjectName(QStringLiteral("gnomePrimaryMenuPopover"));
     // The popup itself is the Adwaita surface. Keeping the top-level
     // translucent makes Qt/Wayland paint only its children on some compositors.
     // Force stylesheet background painting instead.
-    setAttribute(Qt::WA_TranslucentBackground, false);
-    setAttribute(Qt::WA_StyledBackground, true);
-    setAutoFillBackground(true);
+    setAttribute(Qt::WA_TranslucentBackground, true);
+    setAttribute(Qt::WA_StyledBackground, false);
+    setAutoFillBackground(false);
     setFocusPolicy(Qt::StrongFocus);
 
     auto* outer = new QVBoxLayout(this);
-    outer->setContentsMargins(5, 5, 5, 5);
+    outer->setContentsMargins(7, 15, 7, 7);
     outer->setSpacing(0);
 
     stack_ = new QStackedWidget(this);
@@ -513,13 +513,168 @@ class GnomePrimaryMenuPopover final : public QFrame {
     setFixedWidth(210);
     adjustSize();
 
-    const QPoint bottom_right =
-        anchor->mapToGlobal(QPoint(anchor->width(), anchor->height() + 6));
+    const QPoint anchor_bottom_right =
+        anchor->mapToGlobal(QPoint(anchor->width(), anchor->height()));
 
-    move(bottom_right.x() - width(), bottom_right.y());
+    const QPoint anchor_bottom_center =
+        anchor->mapToGlobal(
+            QPoint(anchor->width() / 2, anchor->height()));
+
+    int popup_x = anchor_bottom_right.x() - width();
+    int popup_y = anchor_bottom_right.y() + 1;
+
+    if (auto* screen = anchor->screen(); screen != nullptr) {
+      const QRect available = screen->availableGeometry();
+
+      popup_x = std::clamp(
+          popup_x,
+          available.left() + 8,
+          available.right() - width() - 8);
+    }
+
+    arrow_x_ = std::clamp<qreal>(
+        static_cast<qreal>(anchor_bottom_center.x() - popup_x),
+        24.0,
+        static_cast<qreal>(width()) - 24.0);
+
+    move(popup_x, popup_y);
+    update();
+
     show();
     raise();
     setFocus(Qt::PopupFocusReason);
+  }
+
+ protected:
+  void paintEvent(QPaintEvent*) override {
+    /*
+       GTK4 GtkPopover shape:
+
+           arrow
+             ▲
+          ╭──┴──────────────╮
+          │    contents     │
+          ╰─────────────────╯
+
+       The arrow, body, border and shadow are painted as ONE path. That is the
+       important difference from a rounded QFrame with a triangle stuck on top.
+    */
+
+    const auto& colors = theme();
+
+    constexpr qreal kShadowInset = 5.0;
+    constexpr qreal kArrowHeight = 9.0;
+    constexpr qreal kArrowHalfWidth = 8.0;
+    constexpr qreal kRadius = 12.0;
+
+    const QRectF body(
+        kShadowInset,
+        kShadowInset + kArrowHeight,
+        width() - (kShadowInset * 2.0),
+        height() - (kShadowInset * 2.0) - kArrowHeight);
+
+    const qreal tip_x = std::clamp(
+        arrow_x_,
+        body.left() + kRadius + kArrowHalfWidth,
+        body.right() - kRadius - kArrowHalfWidth);
+
+    const qreal tip_y = kShadowInset;
+    const qreal top = body.top();
+    const qreal right = body.right();
+    const qreal bottom = body.bottom();
+    const qreal left = body.left();
+
+    QPainterPath bubble;
+
+    bubble.moveTo(left + kRadius, top);
+
+    bubble.lineTo(tip_x - kArrowHalfWidth, top);
+
+    /*
+       Slightly curved shoulders mimic GTK custom arrow rendering instead of
+       looking like a raw CSS triangle.
+    */
+    bubble.cubicTo(
+        tip_x - 5.0,
+        top,
+        tip_x - 4.0,
+        tip_y + 1.5,
+        tip_x,
+        tip_y);
+
+    bubble.cubicTo(
+        tip_x + 4.0,
+        tip_y + 1.5,
+        tip_x + 5.0,
+        top,
+        tip_x + kArrowHalfWidth,
+        top);
+
+    bubble.lineTo(right - kRadius, top);
+
+    bubble.quadTo(
+        right,
+        top,
+        right,
+        top + kRadius);
+
+    bubble.lineTo(right, bottom - kRadius);
+
+    bubble.quadTo(
+        right,
+        bottom,
+        right - kRadius,
+        bottom);
+
+    bubble.lineTo(left + kRadius, bottom);
+
+    bubble.quadTo(
+        left,
+        bottom,
+        left,
+        bottom - kRadius);
+
+    bubble.lineTo(left, top + kRadius);
+
+    bubble.quadTo(
+        left,
+        top,
+        left + kRadius,
+        top);
+
+    bubble.closeSubpath();
+
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+
+    /*
+       GTK applies the visible shadow to contents while the arrow is custom
+       drawn over it. Here both pieces are one path, so one shadow follows the
+       exact speech-bubble silhouette.
+    */
+    QColor shadow = colors.menu_border;
+    shadow.setAlpha(90);
+
+    QPen shadow_pen(shadow);
+    shadow_pen.setWidthF(7.0);
+    shadow_pen.setJoinStyle(Qt::RoundJoin);
+    shadow_pen.setCapStyle(Qt::RoundCap);
+
+    painter.save();
+    painter.translate(0.0, 1.5);
+    painter.setBrush(Qt::NoBrush);
+    painter.setPen(shadow_pen);
+    painter.drawPath(bubble);
+    painter.restore();
+
+    painter.setBrush(colors.menu_bg);
+
+    QPen border_pen(colors.menu_border);
+    border_pen.setWidthF(1.0);
+    border_pen.setJoinStyle(Qt::RoundJoin);
+
+    painter.setPen(border_pen);
+    painter.drawPath(bubble);
   }
 
  private:
@@ -766,6 +921,7 @@ class GnomePrimaryMenuPopover final : public QFrame {
     stack_->setCurrentWidget(root);
   }
 
+  qreal arrow_x_ = 105.0;
   QWidget* action_root_ = nullptr;
   QMenuBar* menu_bar_ = nullptr;
   QStackedWidget* stack_ = nullptr;

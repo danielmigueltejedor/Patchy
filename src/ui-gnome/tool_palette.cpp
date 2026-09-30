@@ -1,5 +1,8 @@
 #include "ui-gnome/tool_palette.hpp"
 
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <utility>
@@ -34,7 +37,7 @@ constexpr ToolDefinition kTools[] = {
 
     {Tool::Pen, "Pluma", "tool-pen"},
     {Tool::PathSelect, "Selección de trazado", "tool-path-select"},
-    {Tool::Shape, "Forma", "tool-rect"},
+    {Tool::Rectangle, "Forma", "tool-rect"},
     {Tool::Text, "Texto", "tool-text"},
 
     {Tool::Eyedropper, "Cuentagotas", "tool-eyedropper"},
@@ -49,91 +52,176 @@ struct ToolBinding {
 
 
 struct FlyoutEntry {
+  Tool tool;
   const char* name;
+  const char* icon;
   bool available;
 };
+
+GtkWidget* tool_icon(
+    const char* icon_name);
 
 std::vector<FlyoutEntry> tool_flyout_entries(
     Tool tool) {
   switch (tool) {
     case Tool::Marquee:
+    case Tool::EllipticalMarquee:
       return {
-          {"Marco rectangular", true},
-          {"Marco elíptico", false},
+          {Tool::Marquee, "Marco rectangular", "tool-marquee", true},
+          {Tool::EllipticalMarquee, "Marco elíptico", "tool-marquee-ellipse", true},
       };
 
     case Tool::Lasso:
+    case Tool::MagneticLasso:
       return {
-          {"Lazo", true},
-          {"Lazo magnético", false},
+          {Tool::Lasso, "Lazo", "tool-lasso", true},
+          {Tool::MagneticLasso, "Lazo magnético", "tool-magnetic-lasso", true},
       };
 
     case Tool::MagicWand:
+    case Tool::QuickSelect:
       return {
-          {"Varita mágica", false},
-          {"Selección rápida", false},
+          {Tool::MagicWand, "Varita mágica", "tool-wand", true},
+          {Tool::QuickSelect, "Selección rápida", "tool-quick-select", true},
+      };
+
+    case Tool::Brush:
+    case Tool::MixerBrush:
+      return {
+          {Tool::Brush, "Pincel", "tool-brush", true},
+          {Tool::MixerBrush, "Pincel mezclador", "tool-mixer-brush", false},
       };
 
     case Tool::Gradient:
+    case Tool::Fill:
       return {
-          {"Degradado", true},
-          {"Bote de pintura", false},
+          {Tool::Gradient, "Degradado", "tool-gradient", true},
+          {Tool::Fill, "Bote de pintura", "tool-fill", true},
       };
 
     case Tool::Clone:
+    case Tool::PatternStamp:
       return {
-          {"Tampón de clonar", false},
-          {"Tampón de motivo", false},
+          {Tool::Clone, "Tampón de clonar", "tool-clone", false},
+          {Tool::PatternStamp, "Tampón de motivo", "tool-pattern-stamp", false},
       };
 
     case Tool::Healing:
+    case Tool::SpotHealing:
+    case Tool::PatchTool:
       return {
-          {"Pincel corrector", false},
-          {"Pincel corrector puntual", false},
-          {"Parche", false},
+          {Tool::Healing, "Pincel corrector", "tool-healing", false},
+          {Tool::SpotHealing, "Pincel corrector puntual", "tool-spot-healing", false},
+          {Tool::PatchTool, "Parche", "tool-patch", false},
       };
 
     case Tool::Smudge:
+    case Tool::BlurBrush:
+    case Tool::SharpenBrush:
       return {
-          {"Dedo", true},
-          {"Pincel mezclador", false},
-          {"Desenfocar", false},
-          {"Enfocar", false},
+          {Tool::Smudge, "Dedo", "tool-smudge", true},
+          {Tool::MixerBrush, "Pincel mezclador", "tool-mixer-brush", false},
+          {Tool::BlurBrush, "Desenfocar", "tool-blur", false},
+          {Tool::SharpenBrush, "Enfocar", "tool-sharpen", false},
       };
 
     case Tool::Dodge:
+    case Tool::Burn:
+    case Tool::Sponge:
       return {
-          {"Sobreexponer", false},
-          {"Subexponer", false},
-          {"Esponja", false},
+          {Tool::Dodge, "Sobreexponer", "tool-dodge", false},
+          {Tool::Burn, "Subexponer", "tool-burn", false},
+          {Tool::Sponge, "Esponja", "tool-sponge", false},
       };
 
     case Tool::Pen:
+    case Tool::AddAnchor:
+    case Tool::DeleteAnchor:
+    case Tool::ConvertPoint:
       return {
-          {"Pluma", false},
-          {"Añadir punto de ancla", false},
-          {"Eliminar punto de ancla", false},
-          {"Convertir punto", false},
+          {Tool::Pen, "Pluma", "tool-pen", false},
+          {Tool::AddAnchor, "Añadir punto de ancla", "tool-add-anchor", false},
+          {Tool::DeleteAnchor, "Eliminar punto de ancla", "tool-delete-anchor", false},
+          {Tool::ConvertPoint, "Convertir punto", "tool-convert-point", false},
       };
 
     case Tool::PathSelect:
+    case Tool::DirectSelect:
       return {
-          {"Selección de trazado", false},
-          {"Selección directa", false},
+          {Tool::PathSelect, "Selección de trazado", "tool-path-select", false},
+          {Tool::DirectSelect, "Selección directa", "tool-direct-select", false},
       };
 
-    case Tool::Shape:
+    case Tool::Line:
+    case Tool::Rectangle:
+    case Tool::Ellipse:
+    case Tool::Polygon:
+    case Tool::CustomShape:
       return {
-          {"Línea", false},
-          {"Rectángulo", true},
-          {"Elipse", false},
-          {"Polígono", false},
-          {"Forma personalizada", false},
+          {Tool::Line, "Línea", "tool-line", true},
+          {Tool::Rectangle, "Rectángulo", "tool-rect", true},
+          {Tool::Ellipse, "Elipse", "tool-ellipse", true},
+          {Tool::Polygon, "Polígono", "tool-polygon", false},
+          {Tool::CustomShape, "Forma personalizada", "tool-custom-shape", false},
       };
 
     default:
       return {};
   }
+}
+
+struct FlyoutChoiceBinding {
+  GtkWidget* owner{};
+  GtkPopover* popover{};
+  ToolBinding* binding{};
+  Tool tool{};
+  const char* name{};
+  const char* icon{};
+};
+
+void flyout_choice_clicked(
+    GtkButton*,
+    gpointer data) {
+  auto* choice =
+      static_cast<FlyoutChoiceBinding*>(
+          data);
+
+  if (
+      choice == nullptr ||
+      choice->binding == nullptr) {
+    return;
+  }
+
+  choice->binding->tool =
+      choice->tool;
+
+  g_object_set_data(
+      G_OBJECT(choice->owner),
+      "lienzo-tool-id",
+      GINT_TO_POINTER(
+          static_cast<int>(
+              choice->tool) + 1));
+
+  gtk_button_set_child(
+      GTK_BUTTON(choice->owner),
+      tool_icon(choice->icon));
+
+  gtk_widget_set_tooltip_text(
+      choice->owner,
+      choice->name);
+
+  gtk_toggle_button_set_active(
+      GTK_TOGGLE_BUTTON(
+          choice->owner),
+      TRUE);
+
+  if (choice->binding->callback) {
+    choice->binding->callback(
+        choice->tool);
+  }
+
+  gtk_popover_popdown(
+      choice->popover);
 }
 
 void present_tool_flyout(
@@ -197,6 +285,36 @@ void present_tool_flyout(
     gtk_widget_set_sensitive(
         row,
         entry.available);
+
+    if (entry.available) {
+      auto* owner_binding =
+          static_cast<ToolBinding*>(
+              g_object_get_data(
+                  G_OBJECT(owner),
+                  "lienzo-tool-binding"));
+
+      auto* choice =
+          new FlyoutChoiceBinding{
+              owner,
+              GTK_POPOVER(popover),
+              owner_binding,
+              entry.tool,
+              entry.name,
+              entry.icon};
+
+      g_signal_connect_data(
+          row,
+          "clicked",
+          G_CALLBACK(
+              flyout_choice_clicked),
+          choice,
+          [](gpointer data, GClosure*) {
+            delete static_cast<
+                FlyoutChoiceBinding*>(
+                    data);
+          },
+          GConnectFlags(0));
+    }
 
     GtkWidget* child =
         gtk_button_get_child(
@@ -311,6 +429,167 @@ GtkWidget* tool_icon(
   return image;
 }
 
+struct PaletteColorState {
+  ToolPaletteControls controls;
+  GtkColorButton* foreground{};
+  GtkColorButton* background{};
+  bool synchronizing{false};
+};
+
+GdkRGBA to_rgba(
+    patchy::EditColor color) {
+  return GdkRGBA{
+      color.r / 255.0F,
+      color.g / 255.0F,
+      color.b / 255.0F,
+      color.a / 255.0F};
+}
+
+patchy::EditColor from_rgba(
+    const GdkRGBA& color) {
+  const auto component =
+      [](float value) {
+        return static_cast<std::uint8_t>(
+            std::clamp(
+                static_cast<int>(
+                    std::lround(
+                        value * 255.0F)),
+                0,
+                255));
+      };
+
+  return patchy::EditColor{
+      component(color.red),
+      component(color.green),
+      component(color.blue),
+      component(color.alpha)};
+}
+
+void sync_palette_colors(
+    PaletteColorState* state) {
+  if (state == nullptr) {
+    return;
+  }
+
+  state->synchronizing = true;
+
+  if (
+      state->controls.foreground_color &&
+      state->foreground != nullptr) {
+    const GdkRGBA rgba =
+        to_rgba(
+            state->controls.foreground_color());
+
+    gtk_color_chooser_set_rgba(
+        GTK_COLOR_CHOOSER(
+            state->foreground),
+        &rgba);
+  }
+
+  if (
+      state->controls.background_color &&
+      state->background != nullptr) {
+    const GdkRGBA rgba =
+        to_rgba(
+            state->controls.background_color());
+
+    gtk_color_chooser_set_rgba(
+        GTK_COLOR_CHOOSER(
+            state->background),
+        &rgba);
+  }
+
+  state->synchronizing = false;
+}
+
+void foreground_color_changed(
+    GtkColorButton* button,
+    gpointer data) {
+  auto* state =
+      static_cast<PaletteColorState*>(
+          data);
+
+  if (
+      state->synchronizing ||
+      !state->controls.set_foreground_color) {
+    return;
+  }
+
+  GdkRGBA rgba{};
+
+  gtk_color_chooser_get_rgba(
+      GTK_COLOR_CHOOSER(button),
+      &rgba);
+
+  state->controls.set_foreground_color(
+      from_rgba(rgba));
+}
+
+void background_color_changed(
+    GtkColorButton* button,
+    gpointer data) {
+  auto* state =
+      static_cast<PaletteColorState*>(
+          data);
+
+  if (
+      state->synchronizing ||
+      !state->controls.set_background_color) {
+    return;
+  }
+
+  GdkRGBA rgba{};
+
+  gtk_color_chooser_get_rgba(
+      GTK_COLOR_CHOOSER(button),
+      &rgba);
+
+  state->controls.set_background_color(
+      from_rgba(rgba));
+}
+
+void quick_mask_toggled(
+    GtkToggleButton* button,
+    gpointer data) {
+  auto* state =
+      static_cast<PaletteColorState*>(
+          data);
+
+  if (state->controls.set_quick_mask) {
+    state->controls.set_quick_mask(
+        gtk_toggle_button_get_active(
+            button));
+  }
+}
+
+void default_colors_clicked(
+    GtkButton*,
+    gpointer data) {
+  auto* state =
+      static_cast<PaletteColorState*>(
+          data);
+
+  if (state->controls.reset_colors) {
+    state->controls.reset_colors();
+  }
+
+  sync_palette_colors(state);
+}
+
+void swap_colors_clicked(
+    GtkButton*,
+    gpointer data) {
+  auto* state =
+      static_cast<PaletteColorState*>(
+          data);
+
+  if (state->controls.swap_colors) {
+    state->controls.swap_colors();
+  }
+
+  sync_palette_colors(state);
+}
+
 }  // namespace
 
 const char* tool_name(
@@ -326,7 +605,8 @@ const char* tool_name(
 
 GtkWidget* create_tool_palette(
     Tool initial_tool,
-    ToolSelectedCallback callback) {
+    ToolSelectedCallback callback,
+    ToolPaletteControls controls) {
   GtkWidget* palette =
       gtk_box_new(
           GTK_ORIENTATION_VERTICAL,
@@ -347,6 +627,44 @@ GtkWidget* create_tool_palette(
   gtk_widget_set_margin_end(
       palette,
       4);
+
+  static bool compact_palette_css_installed = false;
+
+  if (!compact_palette_css_installed) {
+    GtkCssProvider* provider =
+        gtk_css_provider_new();
+
+    gtk_css_provider_load_from_string(
+        provider,
+        ".lienzo-color-swatch {"
+        "  min-width: 22px;"
+        "  min-height: 22px;"
+        "  padding: 0;"
+        "  margin: 0;"
+        "}"
+        ".lienzo-color-swatch > button {"
+        "  min-width: 22px;"
+        "  min-height: 22px;"
+        "  padding: 0;"
+        "  margin: 0;"
+        "}"
+        ".lienzo-color-mini {"
+        "  min-width: 18px;"
+        "  min-height: 18px;"
+        "  padding: 0;"
+        "  margin: 0;"
+        "  font-size: 9px;"
+        "}");
+
+    gtk_style_context_add_provider_for_display(
+        gtk_widget_get_display(palette),
+        GTK_STYLE_PROVIDER(provider),
+        GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+
+    g_object_unref(provider);
+
+    compact_palette_css_installed = true;
+  }
 
   GtkGesture* secondary =
       gtk_gesture_click_new();
@@ -402,12 +720,16 @@ GtkWidget* create_tool_palette(
 
     const bool implemented =
         definition.tool == Tool::Move ||
+        definition.tool == Tool::Marquee ||
+        definition.tool == Tool::Lasso ||
+        definition.tool == Tool::MagicWand ||
         definition.tool == Tool::Crop ||
         definition.tool == Tool::Brush ||
         definition.tool == Tool::Eraser ||
         definition.tool == Tool::Gradient ||
         definition.tool == Tool::Smudge ||
-        definition.tool == Tool::Shape ||
+        definition.tool == Tool::Rectangle ||
+        definition.tool == Tool::Text ||
         definition.tool == Tool::Eyedropper ||
         definition.tool == Tool::Hand ||
         definition.tool == Tool::Zoom;
@@ -446,6 +768,11 @@ GtkWidget* create_tool_palette(
             definition.tool,
             callback};
 
+    g_object_set_data(
+        G_OBJECT(button),
+        "lienzo-tool-binding",
+        binding);
+
     g_signal_connect_data(
         button,
         "toggled",
@@ -468,6 +795,263 @@ GtkWidget* create_tool_palette(
 
     ++index;
   }
+
+  GtkWidget* spacer =
+      gtk_box_new(
+          GTK_ORIENTATION_VERTICAL,
+          0);
+
+  gtk_widget_set_vexpand(
+      spacer,
+      TRUE);
+
+  gtk_box_append(
+      GTK_BOX(palette),
+      spacer);
+
+  gtk_box_append(
+      GTK_BOX(palette),
+      gtk_separator_new(
+          GTK_ORIENTATION_HORIZONTAL));
+
+  auto* color_state =
+      new PaletteColorState{
+          controls,
+          nullptr,
+          nullptr,
+          false};
+
+  g_object_set_data_full(
+      G_OBJECT(palette),
+      "lienzo-palette-color-state",
+      color_state,
+      [](gpointer data) {
+        delete static_cast<
+            PaletteColorState*>(data);
+      });
+
+  // Swatches superpuestos, como los controles
+  // frontal/fondo clásicos de un editor gráfico.
+  GtkWidget* swatches =
+      gtk_overlay_new();
+
+  gtk_widget_set_size_request(
+      swatches,
+      34,
+      34);
+
+  GtkWidget* background =
+      gtk_color_button_new();
+
+  color_state->background =
+      GTK_COLOR_BUTTON(background);
+
+  gtk_widget_set_size_request(
+      background,
+      22,
+      22);
+
+  gtk_widget_add_css_class(
+      background,
+      "lienzo-color-swatch");
+
+  gtk_widget_set_halign(
+      background,
+      GTK_ALIGN_END);
+
+  gtk_widget_set_valign(
+      background,
+      GTK_ALIGN_END);
+
+  gtk_widget_set_tooltip_text(
+      background,
+      "Color de fondo");
+
+  gtk_overlay_set_child(
+      GTK_OVERLAY(swatches),
+      background);
+
+  GtkWidget* foreground =
+      gtk_color_button_new();
+
+  color_state->foreground =
+      GTK_COLOR_BUTTON(foreground);
+
+  gtk_widget_set_size_request(
+      foreground,
+      22,
+      22);
+
+  gtk_widget_add_css_class(
+      foreground,
+      "lienzo-color-swatch");
+
+  gtk_widget_set_halign(
+      foreground,
+      GTK_ALIGN_START);
+
+  gtk_widget_set_valign(
+      foreground,
+      GTK_ALIGN_START);
+
+  gtk_widget_set_tooltip_text(
+      foreground,
+      "Color frontal");
+
+  gtk_overlay_add_overlay(
+      GTK_OVERLAY(swatches),
+      foreground);
+
+  gtk_widget_set_halign(
+      swatches,
+      GTK_ALIGN_CENTER);
+
+  gtk_widget_set_margin_top(
+      swatches,
+      6);
+
+  gtk_box_append(
+      GTK_BOX(palette),
+      swatches);
+
+  g_signal_connect(
+      foreground,
+      "color-set",
+      G_CALLBACK(
+          foreground_color_changed),
+      color_state);
+
+  g_signal_connect(
+      background,
+      "color-set",
+      G_CALLBACK(
+          background_color_changed),
+      color_state);
+
+  sync_palette_colors(
+      color_state);
+
+  GtkWidget* color_actions =
+      gtk_box_new(
+          GTK_ORIENTATION_HORIZONTAL,
+          0);
+
+  gtk_widget_set_halign(
+      color_actions,
+      GTK_ALIGN_CENTER);
+
+  GtkWidget* defaults =
+      gtk_button_new_with_label(
+          "D");
+
+  gtk_widget_add_css_class(
+      defaults,
+      "flat");
+
+  gtk_widget_add_css_class(
+      defaults,
+      "lienzo-color-mini");
+
+  gtk_widget_set_tooltip_text(
+      defaults,
+      "Colores por defecto (D)");
+
+  gtk_widget_set_size_request(
+      defaults,
+      18,
+      18);
+
+  GtkWidget* swap =
+      gtk_button_new_with_label(
+          "X");
+
+  gtk_widget_add_css_class(
+      swap,
+      "flat");
+
+  gtk_widget_add_css_class(
+      swap,
+      "lienzo-color-mini");
+
+  gtk_widget_set_tooltip_text(
+      swap,
+      "Intercambiar colores (X)");
+
+  gtk_widget_set_size_request(
+      swap,
+      18,
+      18);
+
+  gtk_box_append(
+      GTK_BOX(color_actions),
+      defaults);
+
+  gtk_box_append(
+      GTK_BOX(color_actions),
+      swap);
+
+  gtk_box_append(
+      GTK_BOX(palette),
+      color_actions);
+
+  g_signal_connect(
+      defaults,
+      "clicked",
+      G_CALLBACK(
+          default_colors_clicked),
+      color_state);
+
+  g_signal_connect(
+      swap,
+      "clicked",
+      G_CALLBACK(
+          swap_colors_clicked),
+      color_state);
+
+  gtk_widget_set_margin_bottom(
+      color_actions,
+      2);
+
+  GtkWidget* quick_mask =
+      gtk_toggle_button_new_with_label(
+          "Q");
+
+  gtk_widget_add_css_class(
+      quick_mask,
+      "flat");
+
+  gtk_widget_add_css_class(
+      quick_mask,
+      "lienzo-color-mini");
+
+  gtk_widget_set_size_request(
+      quick_mask,
+      26,
+      22);
+
+  gtk_widget_set_halign(
+      quick_mask,
+      GTK_ALIGN_CENTER);
+
+  gtk_widget_set_tooltip_text(
+      quick_mask,
+      "Editar en modo Máscara rápida");
+
+  if (controls.quick_mask_enabled) {
+    gtk_toggle_button_set_active(
+        GTK_TOGGLE_BUTTON(quick_mask),
+        controls.quick_mask_enabled());
+  }
+
+  g_signal_connect(
+      quick_mask,
+      "toggled",
+      G_CALLBACK(quick_mask_toggled),
+      color_state);
+
+  gtk_box_append(
+      GTK_BOX(palette),
+      quick_mask);
 
   return palette;
 }

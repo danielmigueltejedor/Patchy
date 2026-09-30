@@ -14,4 +14,7 @@ GtkWidget* create_layer_thumbnail(
 GtkWidget* create_mask_thumbnail(
     const patchy::LayerMask& mask);
 
+GtkWidget* create_channel_thumbnail(
+    const patchy::PixelBuffer& pixels);
+
 }

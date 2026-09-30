@@ -40,6 +40,8 @@ if(UNIX AND NOT APPLE AND NOT EMSCRIPTEN)
         src/ui-gnome/tool_palette.cpp
         src/ui-gnome/workspace.cpp
         src/ui-gnome/canvas.cpp
+        src/ui-gnome/tools/selection_controller.cpp
+        src/ui-gnome/tools/text_controller.cpp
         src/ui-gnome/brush_tips.cpp
         src/ui-gnome/tool_options_bar.cpp
         src/ui-gnome/inspector.cpp

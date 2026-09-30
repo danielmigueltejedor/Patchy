@@ -3,6 +3,7 @@
 #include <adwaita.h>
 #include <glib/gstdio.h>
 
+#include <algorithm>
 #include <string>
 
 namespace lienzo::gnome {
@@ -114,6 +115,49 @@ std::string get_string(
   return result;
 }
 
+int get_int(
+    const char* group,
+    const char* key,
+    int fallback) {
+  GKeyFile* file =
+      load_preferences();
+
+  GError* error = nullptr;
+
+  const int value =
+      g_key_file_get_integer(
+          file,
+          group,
+          key,
+          &error);
+
+  g_key_file_unref(file);
+
+  if (error != nullptr) {
+    g_error_free(error);
+    return fallback;
+  }
+
+  return value;
+}
+
+void set_int(
+    const char* group,
+    const char* key,
+    int value) {
+  GKeyFile* file =
+      load_preferences();
+
+  g_key_file_set_integer(
+      file,
+      group,
+      key,
+      value);
+
+  save_preferences(file);
+  g_key_file_unref(file);
+}
+
 void set_bool(
     const char* group,
     const char* key,
@@ -212,6 +256,16 @@ GtkWidget* preference_switch(
       GConnectFlags(0));
 
   return row;
+}
+
+void autosave_interval_changed(
+    GtkSpinButton* spin,
+    gpointer) {
+  set_int(
+      "autosave",
+      "intervalMinutes",
+      gtk_spin_button_get_value_as_int(
+          spin));
 }
 
 void scheme_changed(
@@ -340,6 +394,46 @@ void present_preferences_dialog(
           "updates",
           "checkOnStartup",
           true));
+
+  adw_preferences_group_add(
+      ADW_PREFERENCES_GROUP(files),
+      preference_switch(
+          "Guardado automático",
+          "Guarda periódicamente los documentos abiertos",
+          "autosave",
+          "enabled",
+          true));
+
+  GtkWidget* autosave_interval =
+      adw_spin_row_new_with_range(
+          1,
+          60,
+          1);
+
+  adw_preferences_row_set_title(
+      ADW_PREFERENCES_ROW(autosave_interval),
+      "Intervalo de guardado automático");
+
+  adw_action_row_set_subtitle(
+      ADW_ACTION_ROW(autosave_interval),
+      "Minutos entre guardados");
+
+  adw_spin_row_set_value(
+      ADW_SPIN_ROW(autosave_interval),
+      get_int(
+          "autosave",
+          "intervalMinutes",
+          5));
+
+  g_signal_connect(
+      autosave_interval,
+      "value-changed",
+      G_CALLBACK(autosave_interval_changed),
+      nullptr);
+
+  adw_preferences_group_add(
+      ADW_PREFERENCES_GROUP(files),
+      autosave_interval);
 
   adw_preferences_group_add(
       ADW_PREFERENCES_GROUP(files),
@@ -516,6 +610,31 @@ void present_preferences_dialog(
   adw_dialog_present(
       ADW_DIALOG(dialog),
       parent);
+}
+
+bool autosave_enabled() {
+  return get_bool(
+      "autosave",
+      "enabled",
+      true);
+}
+
+void set_autosave_enabled(
+    bool enabled) {
+  set_bool(
+      "autosave",
+      "enabled",
+      enabled);
+}
+
+int autosave_interval_minutes() {
+  return std::clamp(
+      get_int(
+          "autosave",
+          "intervalMinutes",
+          5),
+      1,
+      60);
 }
 
 }  // namespace lienzo::gnome

@@ -14,6 +14,11 @@ public:
   // colors are straight (unmatted), with uncovered pixels left at the cleared black.
   [[nodiscard]] PixelBuffer flatten_rgb8(const Document& document,
                                          std::vector<std::uint8_t>* merged_alpha = nullptr) const;
+
+  [[nodiscard]] PixelBuffer flatten_rgb8_region(
+      const Document& document,
+      Rect region,
+      std::vector<std::uint8_t>* merged_alpha = nullptr) const;
 };
 
 }  // namespace patchy

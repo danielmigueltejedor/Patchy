@@ -1,5 +1,6 @@
 #include "ui-gnome/inspector.hpp"
 #include "ui-gnome/layer_thumbnail.hpp"
+#include "render/compositor.hpp"
 #include "core/adjustment_layer.hpp"
 
 #include <adwaita.h>
@@ -237,61 +238,271 @@ void rebuild_layers(
       0);
 }
 
+std::uint8_t white_backed_component(
+    std::uint8_t component,
+    std::uint8_t alpha) {
+  return static_cast<std::uint8_t>(
+      (static_cast<int>(component) *
+           static_cast<int>(alpha) +
+       255 *
+           (255 - static_cast<int>(alpha))) /
+      255);
+}
+
+GtkWidget* make_channel_row(
+    const char* name,
+    GtkWidget* thumbnail,
+    const char* detail) {
+  GtkWidget* row =
+      gtk_box_new(
+          GTK_ORIENTATION_HORIZONTAL,
+          8);
+
+  gtk_widget_set_margin_top(row, 3);
+  gtk_widget_set_margin_bottom(row, 3);
+  gtk_widget_set_margin_start(row, 6);
+  gtk_widget_set_margin_end(row, 6);
+
+  gtk_widget_set_size_request(
+      thumbnail,
+      42,
+      30);
+
+  gtk_box_append(
+      GTK_BOX(row),
+      thumbnail);
+
+  GtkWidget* text =
+      gtk_box_new(
+          GTK_ORIENTATION_VERTICAL,
+          0);
+
+  GtkWidget* title =
+      gtk_label_new(name);
+
+  gtk_label_set_xalign(
+      GTK_LABEL(title),
+      0.0F);
+
+  gtk_label_set_ellipsize(
+      GTK_LABEL(title),
+      PANGO_ELLIPSIZE_END);
+
+  gtk_box_append(
+      GTK_BOX(text),
+      title);
+
+  if (
+      detail != nullptr &&
+      *detail != 0) {
+    GtkWidget* subtitle =
+        gtk_label_new(detail);
+
+    gtk_label_set_xalign(
+        GTK_LABEL(subtitle),
+        0.0F);
+
+    gtk_widget_add_css_class(
+        subtitle,
+        "dim-label");
+
+    gtk_widget_add_css_class(
+        subtitle,
+        "caption");
+
+    gtk_box_append(
+        GTK_BOX(text),
+        subtitle);
+  }
+
+  gtk_widget_set_hexpand(
+      text,
+      TRUE);
+
+  gtk_box_append(
+      GTK_BOX(row),
+      text);
+
+  return row;
+}
+
 void rebuild_channels(
     InspectorState* state) {
   clear_list(
       state->channels);
 
-  GtkWidget* composite =
-      gtk_label_new(
-          "RGB compuesto");
+  const auto& document =
+      std::as_const(
+          *state->document);
 
-  gtk_widget_set_margin_top(
-      composite,
-      8);
+  std::vector<std::uint8_t> alpha;
 
-  gtk_widget_set_margin_bottom(
-      composite,
-      8);
+  const auto composite =
+      patchy::Compositor{}.flatten_rgb8(
+          document,
+          &alpha);
 
-  gtk_widget_set_margin_start(
-      composite,
-      10);
+  patchy::PixelBuffer composite_gray(
+      document.width(),
+      document.height(),
+      patchy::PixelFormat::gray8());
 
-  gtk_widget_set_halign(
-      composite,
-      GTK_ALIGN_START);
+  patchy::PixelBuffer red(
+      document.width(),
+      document.height(),
+      patchy::PixelFormat::gray8());
+
+  patchy::PixelBuffer green(
+      document.width(),
+      document.height(),
+      patchy::PixelFormat::gray8());
+
+  patchy::PixelBuffer blue(
+      document.width(),
+      document.height(),
+      patchy::PixelFormat::gray8());
+
+  for (
+      int y = 0;
+      y < document.height();
+      ++y) {
+    const auto source =
+        composite.row(y);
+
+    auto composite_dest =
+        composite_gray.row(y);
+
+    auto red_dest =
+        red.row(y);
+
+    auto green_dest =
+        green.row(y);
+
+    auto blue_dest =
+        blue.row(y);
+
+    for (
+        int x = 0;
+        x < document.width();
+        ++x) {
+      const std::size_t pixel_index =
+          static_cast<std::size_t>(y) *
+              static_cast<std::size_t>(
+                  document.width()) +
+          static_cast<std::size_t>(x);
+
+      const auto* pixel =
+          source.data() +
+          static_cast<std::size_t>(x) * 3U;
+
+      const auto a =
+          pixel_index < alpha.size()
+              ? alpha[pixel_index]
+              : 255;
+
+      const auto r =
+          white_backed_component(
+              pixel[0],
+              a);
+
+      const auto g =
+          white_backed_component(
+              pixel[1],
+              a);
+
+      const auto b =
+          white_backed_component(
+              pixel[2],
+              a);
+
+      red_dest[
+          static_cast<std::size_t>(x)] = r;
+
+      green_dest[
+          static_cast<std::size_t>(x)] = g;
+
+      blue_dest[
+          static_cast<std::size_t>(x)] = b;
+
+      composite_dest[
+          static_cast<std::size_t>(x)] =
+          static_cast<std::uint8_t>(
+              (static_cast<int>(r) * 30 +
+               static_cast<int>(g) * 59 +
+               static_cast<int>(b) * 11) /
+              100);
+    }
+  }
 
   gtk_list_box_append(
       state->channels,
-      composite);
+      make_channel_row(
+          "RGB",
+          create_channel_thumbnail(
+              composite_gray),
+          "Compuesto"));
 
-  for (const auto& channel :
-       std::as_const(
-           *state->document).channels()) {
-    GtkWidget* label =
-        gtk_label_new(
-            channel.name().c_str());
+  gtk_list_box_append(
+      state->channels,
+      make_channel_row(
+          "Rojo",
+          create_channel_thumbnail(red),
+          "Canal de componente"));
 
-    gtk_widget_set_margin_top(
-        label,
-        8);
+  gtk_list_box_append(
+      state->channels,
+      make_channel_row(
+          "Verde",
+          create_channel_thumbnail(green),
+          "Canal de componente"));
 
-    gtk_widget_set_margin_bottom(
-        label,
-        8);
+  gtk_list_box_append(
+      state->channels,
+      make_channel_row(
+          "Azul",
+          create_channel_thumbnail(blue),
+          "Canal de componente"));
 
-    gtk_widget_set_margin_start(
-        label,
-        10);
+  for (
+      const auto& channel :
+      document.channels()) {
+    std::string detail =
+        channel.kind() ==
+                patchy::DocumentChannelKind::Spot
+            ? "Tinta plana"
+            : "Canal alfa";
 
-    gtk_widget_set_halign(
-        label,
-        GTK_ALIGN_START);
+    detail += " · ";
+    detail += std::to_string(
+        static_cast<int>(
+            std::lround(
+                channel.display_info().opacity *
+                100.0F)));
+    detail += "%";
+
+    GtkWidget* row =
+        make_channel_row(
+            channel.name().c_str(),
+            create_channel_thumbnail(
+                channel.pixels()),
+            detail.c_str());
+
+    auto* id =
+        new patchy::ChannelId(
+            channel.id());
+
+    g_object_set_data_full(
+        G_OBJECT(row),
+        "lienzo-channel-id",
+        id,
+        [](gpointer data) {
+          delete static_cast<
+              patchy::ChannelId*>(data);
+        });
 
     gtk_list_box_append(
         state->channels,
-        label);
+        row);
   }
 }
 
@@ -856,7 +1067,7 @@ GtkWidget* create_inspector(
 
   gtk_widget_set_size_request(
       root,
-      292,
+      170,
       -1);
 
   GtkWidget* stack =
@@ -1061,6 +1272,85 @@ GtkWidget* create_inspector(
       GTK_SCROLLED_WINDOW(channels_scroll),
       GTK_WIDGET(state->channels));
 
+  GtkWidget* channels_page =
+      gtk_box_new(
+          GTK_ORIENTATION_VERTICAL,
+          0);
+
+  gtk_box_append(
+      GTK_BOX(channels_page),
+      channels_scroll);
+
+  GtkWidget* channel_actions =
+      gtk_box_new(
+          GTK_ORIENTATION_HORIZONTAL,
+          4);
+
+  gtk_widget_set_margin_top(
+      channel_actions,
+      4);
+
+  gtk_widget_set_margin_bottom(
+      channel_actions,
+      4);
+
+  gtk_widget_set_margin_start(
+      channel_actions,
+      4);
+
+  gtk_widget_set_margin_end(
+      channel_actions,
+      4);
+
+  GtkWidget* add_channel =
+      gtk_button_new_from_icon_name(
+          "list-add-symbolic");
+
+  gtk_widget_set_tooltip_text(
+      add_channel,
+      "Nuevo canal alfa");
+
+  GtkWidget* channel_spacer =
+      gtk_box_new(
+          GTK_ORIENTATION_HORIZONTAL,
+          0);
+
+  gtk_widget_set_hexpand(
+      channel_spacer,
+      TRUE);
+
+  GtkWidget* delete_channel =
+      gtk_button_new_from_icon_name(
+          "user-trash-symbolic");
+
+  gtk_widget_set_tooltip_text(
+      delete_channel,
+      "Eliminar canal");
+
+  gtk_widget_add_css_class(
+      add_channel,
+      "flat");
+
+  gtk_widget_add_css_class(
+      delete_channel,
+      "flat");
+
+  gtk_box_append(
+      GTK_BOX(channel_actions),
+      add_channel);
+
+  gtk_box_append(
+      GTK_BOX(channel_actions),
+      channel_spacer);
+
+  gtk_box_append(
+      GTK_BOX(channel_actions),
+      delete_channel);
+
+  gtk_box_append(
+      GTK_BOX(channels_page),
+      channel_actions);
+
   state->paths =
       GTK_LIST_BOX(
           gtk_list_box_new());
@@ -1245,7 +1535,7 @@ GtkWidget* create_inspector(
 
   gtk_stack_add_titled(
       GTK_STACK(stack),
-      channels_scroll,
+      channels_page,
       "channels",
       "Canales");
 
