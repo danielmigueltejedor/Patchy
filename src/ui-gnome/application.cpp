@@ -41,7 +41,7 @@ void on_activate(
 AdwApplication* create_application() {
   AdwApplication* app =
       adw_application_new(
-          "com.getnodalia.Lienzo",
+          "com.nodalix.lienzo",
           G_APPLICATION_DEFAULT_FLAGS);
 
   GSimpleAction* quit =

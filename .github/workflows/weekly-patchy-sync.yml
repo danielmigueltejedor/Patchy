@@ -81,14 +81,49 @@ jobs:
 
           protected_re='^(.github/|README\.md$|AGENTS\.md$|LICENSE$|NOTICE-THIRD-PARTY\.md$|latest_version\.json$|packaging/|scripts/release/|scripts/remote/|docs/release-process\.md$)'
 
+          # Path tags are report-only. Apply rules stay as they are while src/ui
+          # is still the shipping interface. See docs/gnome-architecture.md.
+          classify_commit_paths() {
+            local files="$1"
+            local engine=0
+            local ui=0
+            local other=0
+            local f
+            while IFS= read -r f; do
+              [ -n "$f" ] || continue
+              case "$f" in
+                src/core/*|src/render/*|src/psd/*|src/formats/*|src/filters/*|src/color/*|src/support/*|tests/core/*)
+                  engine=1
+                  ;;
+                src/ui/*|src/app/*|tests/ui/*|src/ui-gnome/*|cmake/LienzoGnome.cmake|docs/gnome-architecture.md)
+                  ui=1
+                  ;;
+                *)
+                  other=1
+                  ;;
+              esac
+            done <<< "$files"
+
+            if [ "$engine" -eq 1 ] && [ "$ui" -eq 0 ] && [ "$other" -eq 0 ]; then
+              printf 'engine'
+            elif [ "$ui" -eq 1 ] && [ "$engine" -eq 0 ] && [ "$other" -eq 0 ]; then
+              printf 'ui'
+            elif [ "$engine" -eq 1 ] && [ "$ui" -eq 1 ]; then
+              printf 'mixed'
+            else
+              printf 'review'
+            fi
+          }
+
           while read -r sha; do
             [ -n "$sha" ] || continue
 
             subject="$(git show -s --format=%s "$sha")"
             files="$(git diff-tree --no-commit-id --name-only -r "$sha")"
+            path_class="$(classify_commit_paths "$files")"
 
             if printf '%s\n' "$files" | grep -Eq "$protected_re"; then
-              printf '%s %s\n' "$sha" "$subject" >> /tmp/patchy-manual.txt
+              printf '%s [%s] %s\n' "$sha" "$path_class" "$subject" >> /tmp/patchy-manual.txt
               continue
             fi
 
@@ -97,7 +132,7 @@ jobs:
             if ! git cherry-pick -x "$sha"; then
               git cherry-pick --abort 2>/dev/null || true
               git reset --hard "$before"
-              printf '%s %s\n' "$sha" "$subject" >> /tmp/patchy-conflicts.txt
+              printf '%s [%s] %s\n' "$sha" "$path_class" "$subject" >> /tmp/patchy-conflicts.txt
               continue
             fi
 
@@ -120,11 +155,11 @@ jobs:
 
             if [ "$identity_ok" -ne 1 ]; then
               git reset --hard "$before"
-              printf '%s %s [Lienzo identity guard]\n' "$sha" "$subject" >> /tmp/patchy-manual.txt
+              printf '%s [%s] %s [Lienzo identity guard]\n' "$sha" "$path_class" "$subject" >> /tmp/patchy-manual.txt
               continue
             fi
 
-            printf '%s %s\n' "$sha" "$subject" >> /tmp/patchy-accepted.txt
+            printf '%s [%s] %s\n' "$sha" "$path_class" "$subject" >> /tmp/patchy-accepted.txt
           done < /tmp/patchy-candidates.txt
 
           accepted="$(wc -l < /tmp/patchy-accepted.txt | tr -d " ")"
@@ -142,6 +177,8 @@ jobs:
             echo "- Auto-applied: **$accepted**"
             echo "- Manual review: **$manual**"
             echo "- Cherry-pick conflicts: **$conflicts**"
+            echo
+            echo "Path tags (\`engine\`, \`ui\`, \`mixed\`, \`review\`) describe the commit. They do not change apply rules while \`src/ui\` is still the shipping interface. Policy: \`docs/gnome-architecture.md\`."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Set up Python

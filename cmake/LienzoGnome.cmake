@@ -40,6 +40,14 @@ if(UNIX AND NOT APPLE AND NOT EMSCRIPTEN)
         src/ui-gnome/tool_palette.cpp
         src/ui-gnome/workspace.cpp
         src/ui-gnome/canvas.cpp
+        src/ui-gnome/canvas_render.cpp
+        src/ui-gnome/canvas_view.cpp
+        src/ui-gnome/canvas_input.cpp
+        src/ui-gnome/canvas_overlay.cpp
+        src/ui-gnome/canvas_brush.cpp
+        src/ui-gnome/canvas_move.cpp
+        src/ui-gnome/canvas_selection.cpp
+        src/ui-gnome/canvas_session.cpp
         src/ui-gnome/tools/selection_controller.cpp
         src/ui-gnome/tools/text_controller.cpp
         src/ui-gnome/tools/retouch_controller.cpp
@@ -75,7 +83,7 @@ if(UNIX AND NOT APPLE AND NOT EMSCRIPTEN)
 
       configure_file(
         "${PROJECT_SOURCE_DIR}/src/ui/icons/lienzo-app.png"
-        "${LIENZO_GNOME_ICON_ROOT}/hicolor/256x256/apps/com.getnodalia.Lienzo.png"
+        "${LIENZO_GNOME_ICON_ROOT}/hicolor/256x256/apps/com.nodalix.lienzo.png"
         COPYONLY
       )
 

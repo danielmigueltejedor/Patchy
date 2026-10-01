@@ -1,5 +1,9 @@
 #include "ui-gnome/tools/selection_controller.hpp"
 
+#include "core/pixel_tools.hpp"
+#include "core/quick_select.hpp"
+#include "core/rect_utils.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -18,38 +22,6 @@ std::int32_t clamp_coord(
       std::max(
           std::int32_t{0},
           maximum - 1));
-}
-
-bool color_matches(
-    const std::uint8_t* a,
-    const std::uint8_t* b,
-    int tolerance) {
-  tolerance =
-      std::clamp(
-          tolerance,
-          0,
-          255);
-
-  std::int64_t distance = 0;
-
-  for (int channel = 0;
-       channel < 4;
-       ++channel) {
-    const int delta =
-        static_cast<int>(a[channel]) -
-        static_cast<int>(b[channel]);
-
-    distance +=
-        static_cast<std::int64_t>(
-            delta * delta);
-  }
-
-  const std::int64_t limit =
-      4LL *
-      tolerance *
-      tolerance;
-
-  return distance <= limit;
 }
 
 }  // namespace
@@ -75,6 +47,7 @@ void SelectionController::resize(
   boundary_.clear();
   bounds_.reset();
   cancel_draft();
+  cancel_quick_select();
 }
 
 std::int32_t SelectionController::width() const noexcept {
@@ -700,11 +673,12 @@ void SelectionController::magic_wand_rgba(
            px < width_;
            ++px) {
         if (
-            color_matches(
+            patchy::color_within_tolerance(
                 row +
                     static_cast<std::ptrdiff_t>(px) *
                         4,
                 reference,
+                4,
                 tolerance)) {
           generated[index(px, py)] =
               255;
@@ -755,9 +729,10 @@ void SelectionController::magic_wand_rgba(
               4;
 
       if (
-          !color_matches(
+          !patchy::color_within_tolerance(
               sample,
               reference,
+              4,
               tolerance)) {
         continue;
       }
@@ -783,15 +758,141 @@ void SelectionController::magic_wand_rgba(
       combine);
 }
 
-void SelectionController::quick_select_rgba(
-    const std::uint8_t* rgba,
-    std::ptrdiff_t stride,
+void SelectionController::stamp_quick_select_seed(
+    std::int32_t x0,
+    std::int32_t y0,
+    std::int32_t x1,
+    std::int32_t y1,
+    int diameter) {
+  if (
+      width_ <= 0 ||
+      height_ <= 0 ||
+      quick_seed_.size() != mask_.size()) {
+    return;
+  }
+
+  const double radius =
+      std::max(
+          0.5,
+          static_cast<double>(diameter) /
+              2.0);
+
+  const double distance =
+      std::hypot(
+          static_cast<double>(x1 - x0),
+          static_cast<double>(y1 - y0));
+
+  const int steps =
+      std::max(
+          1,
+          static_cast<int>(
+              std::ceil(
+                  distance /
+                  std::max(
+                      1.0,
+                      radius * 0.35))));
+
+  const int pad =
+      static_cast<int>(
+          std::ceil(radius)) +
+      2;
+
+  int min_x = std::min(x0, x1) - pad;
+  int min_y = std::min(y0, y1) - pad;
+  int max_x = std::max(x0, x1) + pad;
+  int max_y = std::max(y0, y1) + pad;
+
+  min_x = std::clamp(min_x, 0, width_ - 1);
+  min_y = std::clamp(min_y, 0, height_ - 1);
+  max_x = std::clamp(max_x, 0, width_ - 1);
+  max_y = std::clamp(max_y, 0, height_ - 1);
+
+  const patchy::Rect segment{
+      min_x,
+      min_y,
+      max_x - min_x + 1,
+      max_y - min_y + 1};
+
+  if (quick_seed_bounds_.empty()) {
+    quick_seed_bounds_ = segment;
+  } else {
+    quick_seed_bounds_ =
+        patchy::unite_rect(
+            quick_seed_bounds_,
+            segment);
+  }
+
+  for (int step = 0;
+       step <= steps;
+       ++step) {
+    const double t =
+        static_cast<double>(step) /
+        static_cast<double>(steps);
+
+    const double cx =
+        static_cast<double>(x0) +
+        static_cast<double>(x1 - x0) * t;
+
+    const double cy =
+        static_cast<double>(y0) +
+        static_cast<double>(y1 - y0) * t;
+
+    const int left =
+        std::max(
+            0,
+            static_cast<int>(
+                std::floor(cx - radius)));
+
+    const int right =
+        std::min(
+            width_ - 1,
+            static_cast<int>(
+                std::ceil(cx + radius)));
+
+    const int top =
+        std::max(
+            0,
+            static_cast<int>(
+                std::floor(cy - radius)));
+
+    const int bottom =
+        std::min(
+            height_ - 1,
+            static_cast<int>(
+                std::ceil(cy + radius)));
+
+    for (int py = top; py <= bottom; ++py) {
+      for (int px = left; px <= right; ++px) {
+        const double dx =
+            static_cast<double>(px) +
+            0.5 - cx;
+
+        const double dy =
+            static_cast<double>(py) +
+            0.5 - cy;
+
+        if (
+            dx * dx + dy * dy >
+            radius * radius) {
+          continue;
+        }
+
+        quick_seed_[index(px, py)] = 255;
+      }
+    }
+  }
+}
+
+void SelectionController::begin_quick_select(
     std::int32_t x,
     std::int32_t y,
-    int radius,
+    int diameter,
     SelectionCombine combine) {
+  if (width_ <= 0 || height_ <= 0) {
+    return;
+  }
+
   if (
-      rgba == nullptr ||
       x < 0 ||
       y < 0 ||
       x >= width_ ||
@@ -799,74 +900,179 @@ void SelectionController::quick_select_rgba(
     return;
   }
 
-  radius =
-      std::clamp(
-          radius,
-          2,
-          256);
+  quick_selecting_ = true;
+  quick_combine_ = combine;
+  quick_seed_.assign(mask_.size(), 0);
+  quick_seed_bounds_ = {};
+  quick_stroke_.clear();
+  quick_last_x_ = x;
+  quick_last_y_ = y;
+  quick_stroke_.push_back({x, y});
+  stamp_quick_select_seed(
+      x,
+      y,
+      x,
+      y,
+      diameter);
+}
 
-  const auto* reference =
-      rgba +
-      static_cast<std::ptrdiff_t>(y) *
-          stride +
-      static_cast<std::ptrdiff_t>(x) *
-          4;
+void SelectionController::extend_quick_select(
+    std::int32_t x,
+    std::int32_t y,
+    int diameter) {
+  if (
+      !quick_selecting_ ||
+      x < 0 ||
+      y < 0 ||
+      x >= width_ ||
+      y >= height_ ||
+      (x == quick_last_x_ &&
+       y == quick_last_y_)) {
+    return;
+  }
+
+  stamp_quick_select_seed(
+      quick_last_x_,
+      quick_last_y_,
+      x,
+      y,
+      diameter);
+
+  quick_last_x_ = x;
+  quick_last_y_ = y;
+  quick_stroke_.push_back({x, y});
+}
+
+void SelectionController::cancel_quick_select() noexcept {
+  quick_selecting_ = false;
+  quick_seed_.clear();
+  quick_seed_bounds_ = {};
+  quick_stroke_.clear();
+}
+
+bool SelectionController::quick_selecting() const noexcept {
+  return quick_selecting_;
+}
+
+const std::vector<SelectionPoint>&
+SelectionController::quick_select_stroke() const noexcept {
+  return quick_stroke_;
+}
+
+void SelectionController::finish_quick_select(
+    const std::uint8_t* rgba,
+    std::ptrdiff_t stride,
+    int diameter,
+    bool enhance_edge) {
+  if (
+      !quick_selecting_ ||
+      rgba == nullptr ||
+      width_ <= 0 ||
+      height_ <= 0 ||
+      quick_seed_.size() != mask_.size() ||
+      quick_seed_bounds_.empty()) {
+    cancel_quick_select();
+    return;
+  }
+
+  std::vector<std::uint8_t> base;
+  const std::uint8_t* base_pixels = nullptr;
+
+  if (
+      quick_combine_ !=
+          SelectionCombine::Replace &&
+      !empty()) {
+    base.resize(mask_.size());
+
+    for (std::size_t i = 0;
+         i < mask_.size();
+         ++i) {
+      base[i] =
+          mask_[i] >= 128
+              ? 255
+              : 0;
+    }
+
+    base_pixels = base.data();
+  }
+
+  patchy::QuickSelectParams params;
+  params.brush_radius =
+      std::max(1, diameter / 2);
+  params.subtract =
+      quick_combine_ ==
+      SelectionCombine::Subtract;
+  params.enhance_edge = enhance_edge;
+
+  const auto seed_bounds =
+      patchy::intersect_rect(
+          quick_seed_bounds_,
+          patchy::Rect::from_size(
+              width_,
+              height_));
+
+  const auto combine = quick_combine_;
+  const auto result =
+      patchy::quick_select_segment(
+          rgba,
+          width_,
+          height_,
+          stride,
+          base_pixels,
+          quick_seed_.data(),
+          seed_bounds,
+          params);
+
+  cancel_quick_select();
+
+  if (
+      result.empty() ||
+      result.delta_mask.empty() ||
+      result.delta_bounds.empty()) {
+    return;
+  }
 
   std::vector<std::uint8_t> generated(
       mask_.size(),
       0);
 
-  const int radius_squared =
-      radius * radius;
+  const auto& bounds = result.delta_bounds;
 
-  for (int py =
-           std::max(0, y - radius);
-       py <=
-           std::min(
-               height_ - 1,
-               y + radius);
-       ++py) {
+  for (std::int32_t y = 0;
+       y < bounds.height;
+       ++y) {
+    const auto document_y = bounds.y + y;
+
+    if (
+        document_y < 0 ||
+        document_y >= height_) {
+      continue;
+    }
+
     const auto* row =
-        rgba +
-        static_cast<std::ptrdiff_t>(py) *
-            stride;
+        result.delta_mask.data() +
+        static_cast<std::size_t>(y) *
+            static_cast<std::size_t>(
+                bounds.width);
 
-    for (int px =
-             std::max(0, x - radius);
-         px <=
-             std::min(
-                 width_ - 1,
-                 x + radius);
-         ++px) {
-      const int dx = px - x;
-      const int dy = py - y;
+    for (std::int32_t x = 0;
+         x < bounds.width;
+         ++x) {
+      const auto document_x = bounds.x + x;
 
       if (
-          dx * dx +
-              dy * dy >
-          radius_squared) {
+          document_x < 0 ||
+          document_x >= width_ ||
+          row[x] == 0) {
         continue;
       }
 
-      const auto* sample =
-          row +
-          static_cast<std::ptrdiff_t>(px) *
-              4;
-
-      if (
-          color_matches(
-              sample,
-              reference,
-              42)) {
-        generated[index(px, py)] =
-            255;
-      }
+      generated[index(document_x, document_y)] =
+          255;
     }
   }
 
-  apply_generated(
-      generated,
-      combine);
+  apply_generated(generated, combine);
 }
 
 void SelectionController::paint_mask_segment(

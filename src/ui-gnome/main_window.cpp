@@ -908,7 +908,7 @@ void on_about(
   g_object_set(
       dialog,
       "application-name", "Lienzo",
-      "application-icon", "com.getnodalia.Lienzo",
+      "application-icon", "com.nodalix.lienzo",
       "developer-name", "Daniel Miguel Tejedor",
       "version", "GNOME development frontend",
       "comments", "Editor de imágenes con frontend nativo GNOME",
@@ -1101,7 +1101,7 @@ GtkWindow* create_main_window(
 
   adw_status_page_set_icon_name(
       ADW_STATUS_PAGE(status_page),
-      "com.getnodalia.Lienzo");
+      "com.nodalix.lienzo");
 
   adw_status_page_set_title(
       ADW_STATUS_PAGE(status_page),

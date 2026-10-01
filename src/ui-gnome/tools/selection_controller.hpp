@@ -104,13 +104,31 @@ class SelectionController {
       bool contiguous,
       SelectionCombine combine);
 
-  void quick_select_rgba(
-      const std::uint8_t* rgba,
-      std::ptrdiff_t stride,
+  // Quick Select matches the engine contract: the drag only stamps a brush
+  // footprint. quick_select_segment() runs once, when the gesture ends.
+  void begin_quick_select(
       std::int32_t x,
       std::int32_t y,
-      int radius,
+      int diameter,
       SelectionCombine combine);
+
+  void extend_quick_select(
+      std::int32_t x,
+      std::int32_t y,
+      int diameter);
+
+  void finish_quick_select(
+      const std::uint8_t* rgba,
+      std::ptrdiff_t stride,
+      int diameter,
+      bool enhance_edge);
+
+  void cancel_quick_select() noexcept;
+
+  [[nodiscard]] bool quick_selecting() const noexcept;
+
+  [[nodiscard]] const std::vector<SelectionPoint>&
+  quick_select_stroke() const noexcept;
 
   void paint_mask_segment(
       double x0,
@@ -136,6 +154,22 @@ class SelectionController {
       SelectionCombine combine);
 
   void rebuild_cache();
+
+  void stamp_quick_select_seed(
+      std::int32_t x0,
+      std::int32_t y0,
+      std::int32_t x1,
+      std::int32_t y1,
+      int diameter);
+
+  bool quick_selecting_{false};
+  SelectionCombine quick_combine_{
+      SelectionCombine::Replace};
+  std::vector<std::uint8_t> quick_seed_;
+  patchy::Rect quick_seed_bounds_{};
+  std::vector<SelectionPoint> quick_stroke_;
+  std::int32_t quick_last_x_{0};
+  std::int32_t quick_last_y_{0};
 
   std::int32_t width_{0};
   std::int32_t height_{0};
