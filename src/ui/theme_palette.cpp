@@ -31,9 +31,9 @@ int g_generation = 0;
 const ThemePalette& dark_palette() {
   static const ThemePalette palette{
       // Base surfaces, text, and window frame.
-      .window_bg = rgb(0x181b20),
-      .window_border = rgb(0x0f1216),
-      .text_primary = rgb(0xe8ebef),
+      .window_bg = rgb(0x242424),
+      .window_border = rgb(0x1b1b1b),
+      .text_primary = rgb(0xf6f5f4),
       .script_accent = rgb(0x2dd4bf),
       .script_card_border = rgb(0x626872),
       .script_card_bg = rgb(0x24272d),
@@ -49,70 +49,70 @@ const ThemePalette& dark_palette() {
       .script_string = rgb(0xce9178),
       .script_comment = rgb(0x6a9955),
 
-      .text_secondary = rgb(0xd1d6dc),
-      .text_bright = rgb(0xf4f7f9),
-      .text_disabled = rgb(0x69727d),
+      .text_secondary = rgb(0xdeddda),
+      .text_bright = rgb(0xffffff),
+      .text_disabled = rgb(0x77767b),
       .text_on_accent = rgb(0xffffff),
       .text_on_raised = rgb(0xffffff),
-      .splitter_bg = rgb(0x1e2022),
-      .splitter_hover_bg = rgb(0x4e6f95),
-      .dock_separator_bg = rgb(0x36383b),
+      .splitter_bg = rgb(0x1e1e1e),
+      .splitter_hover_bg = rgb(0x3584e4),
+      .dock_separator_bg = rgb(0x303030),
 
       // The 34px chrome bar.
-      .title_bar_bg = rgb(0x1b2026),
-      .title_bar_border = rgb(0x2a3038),
+      .title_bar_bg = rgb(0x303030),
+      .title_bar_border = rgb(0x1e1e1e),
 
       // Menu bar and menus.
-      .menu_bar_item_hover_bg = rgb(0x262c33),
+      .menu_bar_item_hover_bg = rgb(0x3a3a3a),
       .menu_bar_text_disabled = rgb(0x9a9a9a),
-      .menu_bg = rgb(0x20252b),
-      .menu_border = rgb(0x303740),
-      .menu_item_selected_bg = rgb(0x0f766e),
-      .menu_separator = rgb(0x343b44),
+      .menu_bg = rgb(0x36363a),
+      .menu_border = rgb(0x4a4a4e),
+      .menu_item_selected_bg = rgb(0x454549),
+      .menu_separator = rgb(0x4a4a4e),
 
       // Generic toolbars and tool buttons.
-      .toolbar_bg = rgb(0x1d2228),
-      .toolbar_border = rgb(0x2a3038),
-      .button_hover_bg = rgb(0x293038),
-      .button_hover_border = rgb(0x3b4651),
-      .accent_pressed_bg = rgb(0x0f766e),
-      .accent_border_bright = rgb(0x5eead4),
+      .toolbar_bg = rgb(0x303030),
+      .toolbar_border = rgb(0x1e1e1e),
+      .button_hover_bg = rgb(0x3a3a3a),
+      .button_hover_border = rgb(0x4a4a4a),
+      .accent_pressed_bg = rgb(0x1c71d8),
+      .accent_border_bright = rgb(0x78aeed),
 
       // Custom window chrome.
-      .window_chrome_hover_bg = rgb(0x2b323a),
-      .window_chrome_pressed_bg = rgb(0x15191e),
+      .window_chrome_hover_bg = rgb(0x3a3a3a),
+      .window_chrome_pressed_bg = rgb(0x202020),
       .window_close_hover_bg = rgb(0xc42b1c),
       .window_close_pressed_bg = rgb(0x9f2117),
 
       // Tool palette.
-      .tool_palette_bg = rgb(0x1b2026),
-      .tool_palette_border = rgb(0x2a3038),
-      .tool_palette_separator = rgb(0x303740),
+      .tool_palette_bg = rgb(0x242424),
+      .tool_palette_border = rgb(0x303030),
+      .tool_palette_separator = rgb(0x454545),
 
       // Options bar.
-      .options_bar_bg = rgb(0x1d2228),
-      .options_bar_top_edge = rgb(0x2a3038),
-      .option_separator = rgb(0x303740),
-      .option_chip_bg = rgb(0x171b20),
-      .field_bg = rgb(0x13171b),
-      .field_inset_border = rgb(0x0d1014),
-      .field_bevel_top = rgb(0x2b323a),
-      .options_button_bg = rgb(0x242a31),
-      .accent_checked_bg = rgb(0x0f766e),
-      .accent_checked_border = rgb(0x5eead4),
+      .options_bar_bg = rgb(0x303030),
+      .options_bar_top_edge = rgb(0x3d3d3d),
+      .option_separator = rgb(0x454545),
+      .option_chip_bg = rgb(0x242424),
+      .field_bg = rgb(0x1e1e1e),
+      .field_inset_border = rgb(0x121212),
+      .field_bevel_top = rgb(0x454545),
+      .options_button_bg = rgb(0x3d3d3d),
+      .accent_checked_bg = rgb(0x3584e4),
+      .accent_checked_border = rgb(0x78aeed),
 
       // Check boxes and sliders.
-      .checkbox_compact_bg = rgb(0x1f1f1f),
-      .checkbox_compact_border = rgb(0x777777),
-      .checkbox_indicator_bg = rgb(0x4a4a4a),
-      .checkbox_indicator_border = rgb(0x8a8a8a),
-      .checkbox_accent_border = rgb(0x9ccfff),
-      .accent = rgb(0x14b8a6),
-      .slider_groove_bg = rgb(0x1c1c1c),
-      .slider_groove_border = rgb(0x555555),
-      .slider_fill_border = rgb(0x5aa9ff),
-      .slider_handle_bg = rgb(0xc9d0d8),
-      .slider_handle_border = rgb(0x101010),
+      .checkbox_compact_bg = rgb(0x303030),
+      .checkbox_compact_border = rgb(0x5e5c64),
+      .checkbox_indicator_bg = rgb(0x3d3d3d),
+      .checkbox_indicator_border = rgb(0x77767b),
+      .checkbox_accent_border = rgb(0x78aeed),
+      .accent = rgb(0x3584e4),
+      .slider_groove_bg = rgb(0x1e1e1e),
+      .slider_groove_border = rgb(0x454545),
+      .slider_fill_border = rgb(0x3584e4),
+      .slider_handle_bg = rgb(0xdeddda),
+      .slider_handle_border = rgb(0x5e5c64),
 
       // Dialog spin boxes.
       .spinbox_disabled_bg = rgb(0x2c2c2c),
@@ -121,32 +121,32 @@ const ThemePalette& dark_palette() {
       .spin_button_disabled_bevel = rgb(0x444444),
 
       // Docks and panels.
-      .dock_title_bg = rgb(0x1b2026),
-      .panel_border_strong = rgb(0x11151a),
-      .panel_title_bg = rgb(0x1f252b),
-      .panel_title_bevel_top = rgb(0x293038),
-      .panel_title_border_bottom = rgb(0x14181d),
-      .dock_collapse_text = rgb(0xcfd3d8),
-      .dock_collapse_hover_bg = rgb(0x3b3d40),
-      .dock_collapse_hover_border = rgb(0x5b5e63),
-      .panel_bg = rgb(0x1b2026),
-      .panel_inset_bg = rgb(0x171b20),
-      .panel_inset_border = rgb(0x2c343d),
-      .info_text = rgb(0xd7dde6),
+      .dock_title_bg = rgb(0x303030),
+      .panel_border_strong = rgb(0x1b1b1b),
+      .panel_title_bg = rgb(0x303030),
+      .panel_title_bevel_top = rgb(0x3d3d3d),
+      .panel_title_border_bottom = rgb(0x1e1e1e),
+      .dock_collapse_text = rgb(0xdeddda),
+      .dock_collapse_hover_bg = rgb(0x3a3a3a),
+      .dock_collapse_hover_border = rgb(0x4a4a4a),
+      .panel_bg = rgb(0x242424),
+      .panel_inset_bg = rgb(0x1e1e1e),
+      .panel_inset_border = rgb(0x3d3d3d),
+      .info_text = rgb(0xdeddda),
 
       // Text entry and list widgets.
-      .field_bg_large = rgb(0x171b20),
-      .field_border = rgb(0x343d47),
-      .field_bg_disabled = rgb(0x242527),
-      .field_text_disabled = rgb(0x6d7075),
-      .field_border_disabled = rgb(0x3d3f42),
-      .list_selection_bg = rgb(0x143e3a),
+      .field_bg_large = rgb(0x1e1e1e),
+      .field_border = rgb(0x4a4a4a),
+      .field_bg_disabled = rgb(0x303030),
+      .field_text_disabled = rgb(0x77767b),
+      .field_border_disabled = rgb(0x3d3d3d),
+      .list_selection_bg = rgb(0x1c4f7a),
       .list_item_border = rgb(0x202225),
-      .list_selection_text = rgb(0xf4f6f8),
-      .list_selection_border = rgb(0x2dd4bf),
+      .list_selection_text = rgb(0xffffff),
+      .list_selection_border = rgb(0x3584e4),
       .category_list_item_border = rgb(0x3b3b3b),
-      .category_selected_bg = rgb(0x143e3a),
-      .category_selected_border = rgb(0x2dd4bf),
+      .category_selected_bg = rgb(0x1c4f7a),
+      .category_selected_border = rgb(0x3584e4),
       .history_future_text = rgb(0x737373),
 
       // Layer rows and the layers panel.
@@ -178,22 +178,22 @@ const ThemePalette& dark_palette() {
       .layer_clip_badge = rgb(0x96cdff),
 
       // Bright accent.
-      .accent_bright = rgb(0x2dd4bf),
-      .accent_bright_hover = rgb(0x5eead4),
-      .accent_bright_border = rgb(0x99f6e4),
-      .text_on_accent_bright = rgb(0x062521),
+      .accent_bright = rgb(0x3584e4),
+      .accent_bright_hover = rgb(0x78aeed),
+      .accent_bright_border = rgb(0x99c1f1),
+      .text_on_accent_bright = rgb(0xffffff),
 
       // Push buttons.
-      .button_bg = rgb(0x252b32),
-      .button_border = rgb(0x36404a),
-      .button_hover_border_strong = rgb(0x52606d),
+      .button_bg = rgb(0x3d3d3d),
+      .button_border = rgb(0x4a4a4a),
+      .button_hover_border_strong = rgb(0x5e5c64),
 
       // Status bar.
-      .status_bar_bg = rgb(0x171b20),
-      .status_text = rgb(0xcfcfcf),
-      .status_text_disabled = rgb(0x6f6f6f),
-      .status_field_bg = rgb(0x11151a),
-      .status_field_border = rgb(0x303840),
+      .status_bar_bg = rgb(0x242424),
+      .status_text = rgb(0xdeddda),
+      .status_text_disabled = rgb(0x77767b),
+      .status_field_bg = rgb(0x1e1e1e),
+      .status_field_border = rgb(0x454545),
       .status_field_border_disabled = rgb(0x3a3a3a),
       .status_error_text = rgb(0xff6b68),
       .status_error_wash = rgb(0xa83232),
@@ -213,22 +213,22 @@ const ThemePalette& dark_palette() {
       .console_error_text = rgb(0xe05050),
 
       // Hand-painted rows, preview panes, and the painted-control accent.
-      .list_row_hover_bg = rgb(0x33373d),
-      .preview_pane_bg = rgb(0x252525),
-      .preview_pane_muted_text = rgb(0x9a9a9a),
-      .accent_control = rgb(0x4c9aff),
+      .list_row_hover_bg = rgb(0x353535),
+      .preview_pane_bg = rgb(0x1e1e1e),
+      .preview_pane_muted_text = rgb(0x9a9996),
+      .accent_control = rgb(0x3584e4),
 
       // Tabs.
-      .tab_bg = rgb(0x1b2026),
-      .tab_hover_bg = rgb(0x242a31),
-      .tab_selected_bg = rgb(0x2b323a),
-      .tab_pane_border = rgb(0x303840),
+      .tab_bg = rgb(0x242424),
+      .tab_hover_bg = rgb(0x303030),
+      .tab_selected_bg = rgb(0x3a3a3a),
+      .tab_pane_border = rgb(0x454545),
 
       // The color picker's tab bar.
-      .picker_tab_bg = rgb(0x1b2026),
-      .picker_tab_border = rgb(0x303840),
-      .picker_tab_hover_bg = rgb(0x242a31),
-      .picker_tab_selected_bg = rgb(0x2b323a),
+      .picker_tab_bg = rgb(0x242424),
+      .picker_tab_border = rgb(0x454545),
+      .picker_tab_hover_bg = rgb(0x303030),
+      .picker_tab_selected_bg = rgb(0x3a3a3a),
 
       // Canvas chrome.
       .canvas_backdrop = rgb(0x101317),
@@ -250,10 +250,10 @@ const ThemePalette& dark_palette() {
 
       // Scroll bars.
       .canvas_scrollbar_track = rgb(0x15191e),
-      .panel_scrollbar_track = rgb(0x181c21),
-      .scrollbar_handle_bg = rgb(0x3a434d),
-      .scrollbar_handle_border = rgb(0x46515c),
-      .scrollbar_handle_hover_bg = rgb(0x4b5763),
+      .panel_scrollbar_track = rgb(0x242424),
+      .scrollbar_handle_bg = rgb(0x4a4a4a),
+      .scrollbar_handle_border = rgb(0x5e5c64),
+      .scrollbar_handle_hover_bg = rgb(0x77767b),
 
       // macOS-only group boxes.
       .group_box_border = rgb(0x4f4f4f),
@@ -272,7 +272,7 @@ const ThemePalette& dark_palette() {
       .grid_preview_bg = rgb(0x202020),
       .grid_preview_border = rgb(0x575757),
 
-      .link_text = rgb(0x5eead4),
+      .link_text = rgb(0x78aeed),
 
       // Help > About.
       .splash_bg = rgb(0x171d26),
@@ -371,14 +371,14 @@ const ThemePalette& dark_palette() {
       .swatch_border = rgb(0x9aa4b2),
 
       // Shared button and surface families.
-      .primary_bg = rgb(0x134e4a),
-      .primary_border = rgb(0x2dd4bf),
-      .primary_hover_bg = rgb(0x115e59),
-      .neutral_button_hover_bg = rgb(0x454545),
-      .neutral_button_hover_border = rgb(0x7d7d7d),
-      .list_surface_bg = rgb(0x222222),
-      .list_surface_border = rgb(0x1b1b1b),
-      .selection_soft_bg = rgb(0x143e3a),
+      .primary_bg = rgb(0x3584e4),
+      .primary_border = rgb(0x78aeed),
+      .primary_hover_bg = rgb(0x1c71d8),
+      .neutral_button_hover_bg = rgb(0x4a4a4a),
+      .neutral_button_hover_border = rgb(0x77767b),
+      .list_surface_bg = rgb(0x1e1e1e),
+      .list_surface_border = rgb(0x303030),
+      .selection_soft_bg = rgb(0x1c4f7a),
 
       // Start panel.
       .start_panel_title_text = rgb(0xe9e9e9),
@@ -390,16 +390,16 @@ const ThemePalette& dark_palette() {
       .start_panel_row_hover_bg = rgb(0x323232),
 
       // Icon ink.
-      .icon_ink = rgb(0xdce2eb),
-      .icon_accent = rgb(0x2dd4bf),
-      .icon_accent_soft = rgb(0x99f6e4),
-      .icon_accent_tint = rgb(0x5eead4),
+      .icon_ink = rgb(0xf6f5f4),
+      .icon_accent = rgb(0x78aeed),
+      .icon_accent_soft = rgb(0x99c1f1),
+      .icon_accent_tint = rgb(0x62a0ea),
       .icon_danger = rgb(0xff9696),
       .icon_warning = rgb(0xffc078),
       .icon_folder = rgb(0xf5cd69),
       .icon_folder_fill = rgb(0x3a3320),
       .icon_success = rgb(0x9be9a8),
-      .icon_surface = rgb(0x242628),
+      .icon_surface = rgb(0x303030),
   };
   return palette;
 }
@@ -667,6 +667,139 @@ const ThemePalette& light_palette() {
     light.icon_folder_fill = rgb(0xfdf0c8);
     light.icon_success = rgb(0x1f8a3d);
     light.icon_surface = rgb(0xf0f0f0);
+
+    // Lienzo Adwaita final chrome overrides.
+    // Keep document/canvas colours independent from application chrome.
+    light.window_bg = rgb(0xfafafa);
+    light.window_border = rgb(0xd5d5d5);
+    light.text_primary = rgb(0x2e3436);
+    light.text_secondary = rgb(0x5e5c64);
+    light.text_bright = rgb(0x2e3436);
+    light.text_disabled = rgb(0x929292);
+    light.text_on_accent = rgb(0xffffff);
+    light.text_on_raised = rgb(0x2e3436);
+
+    light.splitter_bg = rgb(0xdeddda);
+    light.splitter_hover_bg = rgb(0x3584e4);
+    light.dock_separator_bg = rgb(0xdeddda);
+
+    light.title_bar_bg = rgb(0xebebeb);
+    light.title_bar_border = rgb(0xd5d5d5);
+
+    light.menu_bar_item_hover_bg = rgb(0xdeddda);
+    light.menu_bg = rgb(0xffffff);
+    light.menu_border = rgb(0xd8d8da);
+    light.menu_item_selected_bg = rgb(0xebebed);
+    light.menu_separator = rgb(0xdedee0);
+
+    light.toolbar_bg = rgb(0xf6f5f4);
+    light.toolbar_border = rgb(0xdeddda);
+    light.button_hover_bg = rgb(0xe7e7e7);
+    light.button_hover_border = rgb(0xc7c7c7);
+    light.accent_pressed_bg = rgb(0x1c71d8);
+    light.accent_border_bright = rgb(0x3584e4);
+
+    light.tool_palette_bg = rgb(0xf6f5f4);
+    light.tool_palette_border = rgb(0xdeddda);
+    light.tool_palette_separator = rgb(0xd5d5d5);
+
+    light.options_bar_bg = rgb(0xf6f5f4);
+    light.options_bar_top_edge = rgb(0xffffff);
+    light.option_separator = rgb(0xdeddda);
+    light.option_chip_bg = rgb(0xebebeb);
+    light.field_bg = rgb(0xffffff);
+    light.field_inset_border = rgb(0xc7c7c7);
+    light.field_bevel_top = rgb(0xffffff);
+    light.options_button_bg = rgb(0xebebeb);
+
+    light.accent = rgb(0x3584e4);
+    light.accent_checked_bg = rgb(0x3584e4);
+    light.accent_checked_border = rgb(0x1c71d8);
+
+    light.checkbox_compact_bg = rgb(0xffffff);
+    light.checkbox_compact_border = rgb(0xc7c7c7);
+    light.checkbox_indicator_bg = rgb(0xffffff);
+    light.checkbox_indicator_border = rgb(0x929292);
+    light.checkbox_accent_border = rgb(0x3584e4);
+
+    light.slider_groove_bg = rgb(0xdeddda);
+    light.slider_groove_border = rgb(0xc7c7c7);
+    light.slider_fill_border = rgb(0x3584e4);
+    light.slider_handle_bg = rgb(0xffffff);
+    light.slider_handle_border = rgb(0xb5b5b5);
+
+    light.dock_title_bg = rgb(0xf6f5f4);
+    light.panel_border_strong = rgb(0xd5d5d5);
+    light.panel_title_bg = rgb(0xf6f5f4);
+    light.panel_title_bevel_top = rgb(0xffffff);
+    light.panel_title_border_bottom = rgb(0xdeddda);
+    light.panel_bg = rgb(0xfafafa);
+    light.panel_inset_bg = rgb(0xffffff);
+    light.panel_inset_border = rgb(0xdeddda);
+
+    light.field_bg_large = rgb(0xffffff);
+    light.field_border = rgb(0xc7c7c7);
+    light.field_bg_disabled = rgb(0xebebeb);
+    light.field_text_disabled = rgb(0x929292);
+    light.field_border_disabled = rgb(0xd5d5d5);
+
+    light.list_selection_bg = rgb(0xd9eaf7);
+    light.list_selection_text = rgb(0x2e3436);
+    light.list_selection_border = rgb(0x3584e4);
+    light.category_selected_bg = rgb(0xd9eaf7);
+    light.category_selected_border = rgb(0x3584e4);
+
+    light.accent_bright = rgb(0x3584e4);
+    light.accent_bright_hover = rgb(0x1c71d8);
+    light.accent_bright_border = rgb(0x3584e4);
+    light.text_on_accent_bright = rgb(0xffffff);
+
+    light.button_bg = rgb(0xebebeb);
+    light.button_border = rgb(0xc7c7c7);
+    light.button_hover_border_strong = rgb(0x929292);
+
+    light.status_bar_bg = rgb(0xf6f5f4);
+    light.status_text = rgb(0x3d3846);
+    light.status_text_disabled = rgb(0x929292);
+    light.status_field_bg = rgb(0xffffff);
+    light.status_field_border = rgb(0xd5d5d5);
+
+    light.list_row_hover_bg = rgb(0xebebeb);
+    light.preview_pane_bg = rgb(0xffffff);
+    light.preview_pane_muted_text = rgb(0x77767b);
+    light.accent_control = rgb(0x3584e4);
+
+    light.tab_bg = rgb(0xf6f5f4);
+    light.tab_hover_bg = rgb(0xebebeb);
+    light.tab_selected_bg = rgb(0xffffff);
+    light.tab_pane_border = rgb(0xdeddda);
+
+    light.picker_tab_bg = rgb(0xf6f5f4);
+    light.picker_tab_border = rgb(0xdeddda);
+    light.picker_tab_hover_bg = rgb(0xebebeb);
+    light.picker_tab_selected_bg = rgb(0xffffff);
+
+    light.panel_scrollbar_track = rgb(0xf6f5f4);
+    light.scrollbar_handle_bg = rgb(0xc7c7c7);
+    light.scrollbar_handle_border = rgb(0xb5b5b5);
+    light.scrollbar_handle_hover_bg = rgb(0x929292);
+
+    light.link_text = rgb(0x1c71d8);
+
+    light.primary_bg = rgb(0x3584e4);
+    light.primary_border = rgb(0x1c71d8);
+    light.primary_hover_bg = rgb(0x1c71d8);
+    light.neutral_button_hover_bg = rgb(0xdeddda);
+    light.neutral_button_hover_border = rgb(0xb5b5b5);
+    light.list_surface_bg = rgb(0xffffff);
+    light.list_surface_border = rgb(0xdeddda);
+    light.selection_soft_bg = rgb(0xd9eaf7);
+
+    light.icon_ink = rgb(0x2e3436);
+    light.icon_accent = rgb(0x3584e4);
+    light.icon_accent_soft = rgb(0x62a0ea);
+    light.icon_accent_tint = rgb(0x1c71d8);
+    light.icon_surface = rgb(0xf6f5f4);
 
     return light;
   }();

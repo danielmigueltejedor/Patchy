@@ -49,6 +49,7 @@
 #include "core/style_presets.hpp"
 #include "core/pixel_tools.hpp"
 #include "core/quick_select.hpp"
+#include "core/retouch_brush.hpp"
 #include "render/compositor.hpp"
 #include "render/layer_compositor.hpp"
 #include "render/tile_cache.hpp"
@@ -76,6 +77,7 @@
 #include <numeric>
 #include <optional>
 #include <span>
+#include <unordered_map>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -871,6 +873,145 @@ std::uint64_t layer_pixels_digest(const patchy::Document& document, patchy::Laye
   return hash;
 }
 
+patchy::RgbaPlane plane_from(const patchy::PixelBuffer& pixels, patchy::Rect bounds,
+                             const std::vector<std::uint8_t>& copy) {
+  patchy::RgbaPlane plane;
+  plane.data = copy.data();
+  plane.origin_x = bounds.x;
+  plane.origin_y = bounds.y;
+  plane.width = pixels.width();
+  plane.height = pixels.height();
+  plane.stride_bytes = static_cast<std::int32_t>(pixels.stride_bytes());
+  plane.channels = pixels.format().channels;
+  return plane;
+}
+
+void retouch_brush_shares_canvas_adjustment_and_healing_math() {
+  patchy::Document document(25, 5, patchy::PixelFormat::rgba8());
+  auto pixels = solid_rgba(25, 5, 100, 100, 100, 255);
+  auto set_pixel = [&pixels](int x, std::uint8_t r, std::uint8_t g, std::uint8_t b, std::uint8_t a) {
+    auto* pixel = pixels.pixel(x, 2);
+    pixel[0] = r;
+    pixel[1] = g;
+    pixel[2] = b;
+    pixel[3] = a;
+  };
+  set_pixel(2, 220, 220, 220, 255);
+  set_pixel(7, 140, 140, 140, 255);
+  set_pixel(12, 64, 64, 64, 255);
+  set_pixel(17, 192, 192, 192, 255);
+  set_pixel(22, 200, 100, 50, 128);
+  const auto layer_id = document.add_pixel_layer("Local adjustments", std::move(pixels)).id();
+  const auto* layer = document.find_layer(layer_id);
+  const auto& source = std::as_const(*layer).pixels();
+  const std::vector<std::uint8_t> original(source.data().begin(), source.data().end());
+  const auto plane = plane_from(source, layer->bounds(), original);
+
+  auto options = tool_options(0, 0, 0);
+  options.brush_size = 1;
+  options.brush_softness = 0;
+
+  const auto apply = [&](patchy::LocalAdjustment adjustment, const patchy::LocalAdjustmentSettings& settings, int x) {
+    CHECK(!patchy::local_adjustment_brush_segment(document, layer_id, x, 2, x, 2, options, plane, adjustment, settings,
+                                                  1.0F)
+               .empty());
+  };
+
+  apply(patchy::LocalAdjustment::Blur, {}, 2);
+  apply(patchy::LocalAdjustment::Sharpen, {}, 7);
+  patchy::LocalAdjustmentSettings dodge;
+  dodge.tone_range = patchy::LocalToneRange::Shadows;
+  dodge.protect_tones = false;
+  apply(patchy::LocalAdjustment::Dodge, dodge, 12);
+  patchy::LocalAdjustmentSettings burn;
+  burn.tone_range = patchy::LocalToneRange::Highlights;
+  burn.protect_tones = false;
+  apply(patchy::LocalAdjustment::Burn, burn, 17);
+  patchy::LocalAdjustmentSettings sponge;
+  sponge.sponge_mode = patchy::SpongeMode::Desaturate;
+  sponge.sponge_vibrance = false;
+  apply(patchy::LocalAdjustment::Sponge, sponge, 22);
+
+  const auto* blurred = layer->pixels().pixel(2, 2);
+  CHECK(blurred[0] == 130 && blurred[1] == 130 && blurred[2] == 130 && blurred[3] == 255);
+  const auto* sharpened = layer->pixels().pixel(7, 2);
+  CHECK(sharpened[0] == 170 && sharpened[1] == 170 && sharpened[2] == 170 && sharpened[3] == 255);
+  const auto* dodged = layer->pixels().pixel(12, 2);
+  CHECK(dodged[0] == 207 && dodged[1] == 207 && dodged[2] == 207 && dodged[3] == 255);
+  const auto* burned = layer->pixels().pixel(17, 2);
+  CHECK(burned[0] == 47 && burned[1] == 47 && burned[2] == 47 && burned[3] == 255);
+  const auto* desaturated = layer->pixels().pixel(22, 2);
+  CHECK(desaturated[0] == 117 && desaturated[1] == 117 && desaturated[2] == 117 && desaturated[3] == 128);
+  const auto* untouched = layer->pixels().pixel(23, 2);
+  CHECK(untouched[0] == 100 && untouched[1] == 100 && untouched[2] == 100 && untouched[3] == 255);
+
+  patchy::PixelBuffer heal_pixels(7, 3, patchy::PixelFormat::rgba8());
+  for (std::int32_t y = 0; y < heal_pixels.height(); ++y) {
+    for (std::int32_t x = 0; x < heal_pixels.width(); ++x) {
+      auto* pixel = heal_pixels.pixel(x, y);
+      pixel[0] = 0;
+      pixel[1] = 0;
+      pixel[2] = 0;
+      pixel[3] = 255;
+    }
+  }
+  for (std::int32_t y = 0; y < 3; ++y) {
+    for (std::int32_t x = 4; x < 7; ++x) {
+      auto* pixel = heal_pixels.pixel(x, y);
+      pixel[0] = 80;
+      pixel[1] = 80;
+      pixel[2] = 80;
+      pixel[3] = 255;
+    }
+  }
+  auto* source_pixel = heal_pixels.pixel(1, 1);
+  source_pixel[0] = 200;
+  source_pixel[1] = 40;
+  source_pixel[2] = 40;
+  source_pixel[3] = 255;
+  auto* destination_pixel = heal_pixels.pixel(5, 1);
+  destination_pixel[0] = 0;
+  destination_pixel[1] = 0;
+  destination_pixel[2] = 100;
+  destination_pixel[3] = 255;
+  const std::vector<std::uint8_t> heal_copy(heal_pixels.data().begin(), heal_pixels.data().end());
+  const auto heal_plane = plane_from(heal_pixels, patchy::Rect{0, 0, 7, 3}, heal_copy);
+  const auto healed = patchy::healing_sample(heal_plane, 1, 1, 5, 1, 1);
+  CHECK(healed[0] == 255);
+  CHECK(healed[1] == 120);
+  CHECK(healed[2] == 120);
+  CHECK(healed[3] == 255);
+  CHECK(patchy::healing_tone_radius(24, 5) == 6);
+
+  patchy::Document clone_document(4, 4, patchy::PixelFormat::rgba8());
+  auto clone_pixels = solid_rgba(4, 4, 0, 0, 255, 255);
+  auto* red = clone_pixels.pixel(0, 0);
+  red[0] = 255;
+  red[1] = 0;
+  red[2] = 0;
+  red[3] = 255;
+  const auto clone_layer = clone_document.add_pixel_layer("Clone", std::move(clone_pixels)).id();
+  const auto* clone_source_layer = clone_document.find_layer(clone_layer);
+  const auto& clone_source = std::as_const(*clone_source_layer).pixels();
+  const std::vector<std::uint8_t> clone_copy(clone_source.data().begin(), clone_source.data().end());
+  const auto clone_plane = plane_from(clone_source, clone_source_layer->bounds(), clone_copy);
+  patchy::CloneStampSettings stamp;
+  stamp.offset_x = -3;
+  stamp.offset_y = -3;
+  auto clone_options = tool_options(0, 0, 0);
+  clone_options.brush_size = 1;
+  clone_options.brush_softness = 0;
+  CHECK(!patchy::clone_stamp_brush_segment(clone_document, clone_layer, 3, 3, 3, 3, clone_options, clone_plane, stamp,
+                                           1.0F)
+             .empty());
+  const auto* stamped = clone_source_layer->pixels().pixel(3, 3);
+  CHECK(stamped[0] == 255 && stamped[1] == 0 && stamped[2] == 0 && stamped[3] == 255);
+
+  std::unordered_map<std::uint64_t, float> caps;
+  CHECK(patchy::capped_stroke_coverage(caps, 1, 1, 1.0F, 1.0F) == 1.0F);
+  CHECK(patchy::capped_stroke_coverage(caps, 1, 1, 1.0F, 1.0F) == 0.0F);
+}
+
 void tool_write_paths_digest_baseline() {
   std::vector<std::pair<std::string, std::uint64_t>> digests;
 
@@ -1100,6 +1241,8 @@ std::vector<patchy::test::TestCase> pixel_tools_tests() {
       {"tool_eraser_clears_alpha_and_writes_artifact", tool_eraser_clears_alpha_and_writes_artifact},
       {"tool_eraser_converts_rgb_layer_to_transparency", tool_eraser_converts_rgb_layer_to_transparency},
       {"tool_smudge_drags_source_pixels_and_writes_artifact", tool_smudge_drags_source_pixels_and_writes_artifact},
+      {"retouch_brush_shares_canvas_adjustment_and_healing_math",
+       retouch_brush_shares_canvas_adjustment_and_healing_math},
       {"tool_line_draws_and_writes_artifact", tool_line_draws_and_writes_artifact},
       {"tool_rectangle_draws_outline_and_writes_artifact", tool_rectangle_draws_outline_and_writes_artifact},
       {"tool_ellipse_draws_and_writes_artifact", tool_ellipse_draws_and_writes_artifact},

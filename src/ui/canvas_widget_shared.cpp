@@ -5,6 +5,7 @@
 #include "ui/canvas_widget_shared.hpp"
 
 #include "core/blend_math.hpp"
+#include "core/retouch_brush.hpp"
 #include "core/layer_metadata.hpp"
 #include "core/layer_render_utils.hpp"
 #include "core/smart_filter.hpp"
@@ -183,84 +184,31 @@ float brush_coverage(double distance_squared, int radius, int softness) {
   return static_cast<float>(1.0 - smooth);
 }
 
-std::array<double, 3> healing_ring_tone(const QImage& snapshot, QPoint center, int radius) {
-  constexpr std::array<std::array<int, 2>, 8> kDirections{{
-      {{-1, -1}}, {{0, -1}}, {{1, -1}}, {{-1, 0}},
-      {{1, 0}},   {{-1, 1}}, {{0, 1}},  {{1, 1}},
-  }};
-  std::array<double, 3> sum{};
-  double alpha_weight = 0.0;
-  for (const auto& direction : kDirections) {
-    const auto x = std::clamp(center.x() + direction[0] * radius, 0, snapshot.width() - 1);
-    const auto y = std::clamp(center.y() + direction[1] * radius, 0, snapshot.height() - 1);
-    const auto* pixel = snapshot.constScanLine(y) + static_cast<std::size_t>(x) * 4U;
-    const auto alpha = static_cast<double>(pixel[3]) / 255.0;
-    alpha_weight += alpha;
-    for (std::size_t channel = 0; channel < sum.size(); ++channel) {
-      sum[channel] += static_cast<double>(pixel[channel]) * alpha;
-    }
+[[nodiscard]] RgbaPlane rgba_plane(const QImage& image) {
+  RgbaPlane plane;
+  if (image.isNull()) {
+    return plane;
   }
-  if (alpha_weight > std::numeric_limits<double>::epsilon()) {
-    for (auto& channel : sum) {
-      channel /= alpha_weight;
-    }
-    return sum;
-  }
+  plane.data = image.constBits();
+  plane.width = image.width();
+  plane.height = image.height();
+  plane.stride_bytes = static_cast<std::int32_t>(image.bytesPerLine());
+  plane.channels = 4;
+  return plane;
+}
 
-  const auto x = std::clamp(center.x(), 0, snapshot.width() - 1);
-  const auto y = std::clamp(center.y(), 0, snapshot.height() - 1);
-  const auto* pixel = snapshot.constScanLine(y) + static_cast<std::size_t>(x) * 4U;
-  return {static_cast<double>(pixel[0]), static_cast<double>(pixel[1]), static_cast<double>(pixel[2])};
+std::array<double, 3> healing_ring_tone(const QImage& snapshot, QPoint center, int radius) {
+  return patchy::healing_ring_tone(rgba_plane(snapshot), center.x(), center.y(), radius);
 }
 
 std::array<std::uint8_t, 4> healing_sample(const QImage& snapshot, QPoint source, QPoint destination,
                                            int tone_radius) {
-  const auto source_tone = healing_ring_tone(snapshot, source, tone_radius);
-  const auto destination_tone = healing_ring_tone(snapshot, destination, tone_radius);
-  const auto* source_pixel = snapshot.constScanLine(source.y()) + static_cast<std::size_t>(source.x()) * 4U;
-  std::array<std::uint8_t, 4> result{};
-  for (std::size_t channel = 0; channel < 3; ++channel) {
-    // Classic frequency-separation healing: carry sampled detail into the
-    // destination's local tone. This is deliberately a fixed local operation,
-    // not patch search, synthesis, or a gradient-domain optimization.
-    result[channel] = clamp_byte(destination_tone[channel] + static_cast<double>(source_pixel[channel]) -
-                                 source_tone[channel]);
-  }
-  result[3] = source_pixel[3];
-  return result;
+  return patchy::healing_sample(rgba_plane(snapshot), source.x(), source.y(), destination.x(), destination.y(),
+                                tone_radius);
 }
 
 void blend_straight_rgba(std::uint8_t* dst, const std::uint8_t* src, float amount) {
-  amount = std::clamp(amount, 0.0F, 1.0F);
-  if (amount <= 0.0F) {
-    return;
-  }
-  if (amount >= 0.999F) {
-    dst[0] = src[0];
-    dst[1] = src[1];
-    dst[2] = src[2];
-    dst[3] = src[3];
-    return;
-  }
-
-  const auto source_alpha = static_cast<float>(src[3]) / 255.0F;
-  const auto destination_alpha = static_cast<float>(dst[3]) / 255.0F;
-  const auto out_alpha = source_alpha * amount + destination_alpha * (1.0F - amount);
-  if (out_alpha <= 0.0F) {
-    dst[0] = src[0];
-    dst[1] = src[1];
-    dst[2] = src[2];
-    dst[3] = 0;
-    return;
-  }
-
-  for (int channel = 0; channel < 3; ++channel) {
-    const auto source_premultiplied = static_cast<float>(src[channel]) * source_alpha;
-    const auto destination_premultiplied = static_cast<float>(dst[channel]) * destination_alpha;
-    dst[channel] =
-        clamp_byte((source_premultiplied * amount + destination_premultiplied * (1.0F - amount)) / out_alpha);
-  }
-  dst[3] = clamp_byte(out_alpha * 255.0F);
+  patchy::blend_straight_rgba(dst, src, amount);
 }
 
 QImage active_layer_sample_image(const Layer& layer, QSize document_size) {

@@ -8,6 +8,7 @@
 #include "formats/ilbm_document_io.hpp"
 #include "formats/jxr_document_io.hpp"
 #include "formats/pcx_document_io.hpp"
+#include "formats/pxd_document_io.hpp"
 #include "formats/raw_document_io.hpp"
 #include "formats/rttex_document_io.hpp"
 #include "formats/svg_document_io.hpp"
@@ -108,6 +109,16 @@ void register_builtin_formats(FormatRegistry& registry) {
                              },
                              [](const Document& document) { return svg::DocumentIo::write(document); },
                              [](std::span<const std::uint8_t> bytes) { return svg::sniff(bytes); }});
+  registry.register_handler({"patchy.formats.pxd",
+                             "Pixelmator Pro Document",
+                             {".pxd"},
+                             [](std::span<const std::uint8_t> bytes) {
+                               FormatReadResult result;
+                               result.document = pxd::DocumentIo::read(bytes, &result.notices);
+                               return result;
+                             },
+                             [](const Document& document) { return pxd::DocumentIo::write(document); },
+                             [](std::span<const std::uint8_t> bytes) { return pxd::DocumentIo::sniff(bytes); }});
   registry.register_handler({"patchy.formats.pcx",
                              "PCX Image",
                              {".pcx"},

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "core/document.hpp"
 #include "core/document_path.hpp"
 #include "core/layer.hpp"

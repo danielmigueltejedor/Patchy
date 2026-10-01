@@ -1250,9 +1250,101 @@ void expand_layer_to_include_rect(Layer& layer, Rect document_rect) {
   PixelBuffer expanded(new_bounds.width, new_bounds.height, destination_format);
   fill_resized_layer_background(expanded, layer);
 
-  for (std::int32_t y = 0; y < source.height(); ++y) {
-    for (std::int32_t x = 0; x < source.width(); ++x) {
-      copy_resized_layer_pixel(source, expanded, x, y, old_bounds.x - new_bounds.x + x, old_bounds.y - new_bounds.y + y);
+  const auto source_format = source.format();
+  const auto expanded_format = expanded.format();
+  const auto source_bpp = bytes_per_pixel(source_format);
+  const auto expanded_bpp = bytes_per_pixel(expanded_format);
+
+  const auto offset_x =
+      old_bounds.x - new_bounds.x;
+  const auto offset_y =
+      old_bounds.y - new_bounds.y;
+
+  if (source_format == expanded_format) {
+    // Fast path: expanding an ordinary raster layer does not transform
+    // pixels. Copy complete contiguous rows instead of re-evaluating
+    // format/stride/COW state for every single pixel.
+    const auto row_bytes =
+        static_cast<std::size_t>(source.width()) *
+        source_bpp;
+
+    const auto destination_byte_offset =
+        static_cast<std::size_t>(offset_x) *
+        expanded_bpp;
+
+    for (std::int32_t y = 0;
+         y < source.height();
+         ++y) {
+      const auto source_row =
+          source.row(y);
+
+      auto destination_row =
+          expanded.row(offset_y + y);
+
+      std::copy_n(
+          source_row.begin(),
+          row_bytes,
+          destination_row.begin() +
+              static_cast<std::ptrdiff_t>(
+                  destination_byte_offset));
+    }
+  } else {
+    // Preserve the old conversion semantics for the uncommon case where
+    // expansion changes the storage format (notably RGB8 -> RGBA8).
+    for (std::int32_t y = 0;
+         y < source.height();
+         ++y) {
+      const auto source_row =
+          source.row(y);
+
+      auto destination_row =
+          expanded.row(offset_y + y);
+
+      for (std::int32_t x = 0;
+           x < source.width();
+           ++x) {
+        const auto* src =
+            source_row.data() +
+            static_cast<std::size_t>(x) *
+                source_bpp;
+
+        auto* dst =
+            destination_row.data() +
+            static_cast<std::size_t>(
+                offset_x + x) *
+                expanded_bpp;
+
+        if (
+            source_format.bit_depth ==
+                BitDepth::UInt8 &&
+            expanded_format.bit_depth ==
+                BitDepth::UInt8 &&
+            source_format.channels >= 3 &&
+            expanded_format.channels >= 3) {
+          const auto channel_count =
+              std::min(
+                  source_format.channels,
+                  expanded_format.channels);
+
+          std::copy_n(
+              src,
+              channel_count,
+              dst);
+
+          if (
+              expanded_format.channels >= 4 &&
+              source_format.channels < 4) {
+            dst[3] = 255;
+          }
+        } else {
+          std::copy_n(
+              src,
+              std::min(
+                  source_bpp,
+                  expanded_bpp),
+              dst);
+        }
+      }
     }
   }
 

@@ -308,9 +308,22 @@ QFont application_font() {
     font.setFamilies(families);
   }
   return font;
+#elif defined(Q_OS_LINUX)
+  // GNOME 48+ uses Adwaita Sans for the desktop interface.
+  // Preserve the point size selected by Qt/the desktop so scaling and
+  // accessibility settings continue to work normally.
+  auto font = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
+  const auto families = QFontDatabase::families();
+
+  if (families.contains(QStringLiteral("Adwaita Sans"))) {
+    font.setFamily(QStringLiteral("Adwaita Sans"));
+  } else if (families.contains(QStringLiteral("Inter"))) {
+    font.setFamily(QStringLiteral("Inter"));
+  }
+
+  return font;
 #else
-  // macOS/Linux: the platform's default UI font at its native size (San Francisco 13pt
-  // on macOS; the fontconfig default on Linux). Forcing 9pt reads tiny there.
+  // macOS keeps its native system UI font.
   return QFontDatabase::systemFont(QFontDatabase::GeneralFont);
 #endif
 }

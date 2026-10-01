@@ -7,6 +7,7 @@
 
 #include "ui/main_window.hpp"
 #include "ui/main_window_shared.hpp"
+#include "ui/theme_palette.hpp"
 
 #include "core/layer_metadata.hpp"
 #include "core/layer_render_utils.hpp"
@@ -215,7 +216,719 @@ namespace patchy::ui {
 
 namespace {
 
+
 constexpr int kWindowResizeBorder = 10;
+
+#ifdef Q_OS_LINUX
+class AdwaitaHeaderBar final : public QToolBar {
+ public:
+  explicit AdwaitaHeaderBar(QWidget* parent = nullptr) : QToolBar(parent) {
+    setObjectName(QStringLiteral("adwaitaHeaderBar"));
+    setMovable(false);
+    setFloatable(false);
+    setAllowedAreas(Qt::TopToolBarArea);
+    setContextMenuPolicy(Qt::PreventContextMenu);
+    setFixedHeight(46);
+  }
+
+ protected:
+  void mousePressEvent(QMouseEvent* event) override {
+    if (event->button() == Qt::LeftButton) {
+      if (auto* handle = window()->windowHandle();
+          handle != nullptr && handle->startSystemMove()) {
+        event->accept();
+        return;
+      }
+    }
+
+    QToolBar::mousePressEvent(event);
+  }
+
+  void mouseDoubleClickEvent(QMouseEvent* event) override {
+    if (event->button() == Qt::LeftButton) {
+      auto* target = window();
+
+      if (target->isMaximized()) {
+        target->showNormal();
+      } else {
+        target->showMaximized();
+      }
+
+      event->accept();
+      return;
+    }
+
+    QToolBar::mouseDoubleClickEvent(event);
+  }
+};
+
+
+
+class GnomeMenuRowWidget final : public QWidget {
+ public:
+  using Activate = std::function<void()>;
+
+  GnomeMenuRowWidget(QString text,
+                     QString accessory,
+                     bool submenu,
+                     bool enabled,
+                     Activate activate,
+                     QWidget* parent = nullptr)
+      : QWidget(parent),
+        text_(std::move(text)),
+        accessory_(std::move(accessory)),
+        submenu_(submenu),
+        activate_(std::move(activate)) {
+    setObjectName(QStringLiteral("gnomeMenuRowWidget"));
+    setEnabled(enabled);
+    setFocusPolicy(Qt::StrongFocus);
+    setMinimumHeight(32);
+    setMaximumHeight(32);
+    setAccessibleName(text_);
+  }
+
+  QSize sizeHint() const override {
+    return QSize(210, 32);
+  }
+
+ protected:
+  bool event(QEvent* event) override {
+    switch (event->type()) {
+      case QEvent::Enter:
+        hovered_ = true;
+        update();
+        break;
+      case QEvent::Leave:
+        hovered_ = false;
+        pressed_ = false;
+        update();
+        break;
+      case QEvent::FocusIn:
+      case QEvent::FocusOut:
+        update();
+        break;
+      default:
+        break;
+    }
+
+    return QWidget::event(event);
+  }
+
+  void mousePressEvent(QMouseEvent* event) override {
+    if (event->button() == Qt::LeftButton && isEnabled()) {
+      pressed_ = true;
+      update();
+      event->accept();
+      return;
+    }
+
+    QWidget::mousePressEvent(event);
+  }
+
+  void mouseReleaseEvent(QMouseEvent* event) override {
+    const bool activate =
+        pressed_ &&
+        event->button() == Qt::LeftButton &&
+        rect().contains(event->position().toPoint()) &&
+        isEnabled();
+
+    pressed_ = false;
+    update();
+
+    if (activate && activate_) {
+      activate_();
+      event->accept();
+      return;
+    }
+
+    QWidget::mouseReleaseEvent(event);
+  }
+
+  void keyPressEvent(QKeyEvent* event) override {
+    if (isEnabled() &&
+        (event->key() == Qt::Key_Return ||
+         event->key() == Qt::Key_Enter ||
+         event->key() == Qt::Key_Space)) {
+      if (activate_) {
+        activate_();
+      }
+
+      event->accept();
+      return;
+    }
+
+    QWidget::keyPressEvent(event);
+  }
+
+  void paintEvent(QPaintEvent*) override {
+    const auto& palette = theme();
+
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+
+    const QRectF row_rect =
+        QRectF(rect()).adjusted(1.0, 1.0, -1.0, -1.0);
+
+    if (pressed_) {
+      painter.setPen(Qt::NoPen);
+      painter.setBrush(palette.window_chrome_pressed_bg);
+      painter.drawRoundedRect(row_rect, 7.0, 7.0);
+    } else if (hovered_ || hasFocus()) {
+      painter.setPen(Qt::NoPen);
+      painter.setBrush(palette.menu_item_selected_bg);
+      painter.drawRoundedRect(row_rect, 7.0, 7.0);
+    }
+
+    QFont label_font = font();
+    label_font.setWeight(QFont::Normal);
+    painter.setFont(label_font);
+
+    const QColor foreground =
+        isEnabled() ? palette.text_primary : palette.text_disabled;
+
+    painter.setPen(foreground);
+
+    const QRect content =
+        rect().adjusted(10, 0, -10, 0);
+
+    int accessory_width = 0;
+
+    if (!accessory_.isEmpty() && !submenu_) {
+      QFont accessory_font = label_font;
+
+      if (accessory_font.pointSizeF() > 0.0) {
+        accessory_font.setPointSizeF(
+            std::max(8.0, accessory_font.pointSizeF() - 1.0));
+      }
+
+      const QFontMetrics accessory_metrics(accessory_font);
+      accessory_width =
+          accessory_metrics.horizontalAdvance(accessory_) + 14;
+
+      painter.setFont(accessory_font);
+      painter.setPen(palette.text_disabled);
+
+      painter.drawText(
+          content,
+          Qt::AlignRight | Qt::AlignVCenter,
+          accessory_);
+
+      painter.setFont(label_font);
+      painter.setPen(foreground);
+    }
+
+    const QFontMetrics metrics(label_font);
+
+    const QRect label_rect =
+        content.adjusted(
+            0,
+            0,
+            -(accessory_width + (submenu_ ? 22 : 0)),
+            0);
+
+    const QString elided =
+        metrics.elidedText(
+            text_,
+            Qt::ElideRight,
+            label_rect.width());
+
+    painter.drawText(
+        label_rect,
+        Qt::AlignLeft | Qt::AlignVCenter,
+        elided);
+
+    if (submenu_) {
+      const qreal cx = width() - 13.0;
+      const qreal cy = height() / 2.0;
+
+      QPen pen(palette.text_secondary);
+      pen.setWidthF(1.6);
+      pen.setCapStyle(Qt::RoundCap);
+      pen.setJoinStyle(Qt::RoundJoin);
+
+      painter.setPen(pen);
+      painter.setBrush(Qt::NoBrush);
+
+      QPainterPath path;
+      path.moveTo(cx - 2.0, cy - 4.0);
+      path.lineTo(cx + 2.0, cy);
+      path.lineTo(cx - 2.0, cy + 4.0);
+
+      painter.drawPath(path);
+    }
+
+    if (hasFocus()) {
+      QPen focus_pen(palette.accent);
+      focus_pen.setWidthF(1.0);
+
+      painter.setPen(focus_pen);
+      painter.setBrush(Qt::NoBrush);
+      painter.drawRoundedRect(
+          row_rect.adjusted(0.5, 0.5, -0.5, -0.5),
+          7.0,
+          7.0);
+    }
+  }
+
+ private:
+  QString text_;
+  QString accessory_;
+  bool submenu_ = false;
+  bool hovered_ = false;
+  bool pressed_ = false;
+  Activate activate_;
+};
+
+
+class GnomePrimaryMenuPopover final : public QFrame {
+ public:
+  GnomePrimaryMenuPopover(QWidget* action_root, QMenuBar* menu_bar, QWidget* parent)
+      : QFrame(parent, Qt::Popup | Qt::FramelessWindowHint | Qt::NoDropShadowWindowHint),
+        action_root_(action_root),
+        menu_bar_(menu_bar) {
+    setObjectName(QStringLiteral("gnomePrimaryMenuPopover"));
+    // The popup itself is the Adwaita surface. Keeping the top-level
+    // translucent makes Qt/Wayland paint only its children on some compositors.
+    // Force stylesheet background painting instead.
+    setAttribute(Qt::WA_TranslucentBackground, true);
+    setAttribute(Qt::WA_StyledBackground, false);
+    setAutoFillBackground(false);
+    setFocusPolicy(Qt::StrongFocus);
+
+    auto* outer = new QVBoxLayout(this);
+    outer->setContentsMargins(7, 15, 7, 7);
+    outer->setSpacing(0);
+
+    stack_ = new QStackedWidget(this);
+    stack_->setObjectName(QStringLiteral("gnomePrimaryMenuStack"));
+    outer->addWidget(stack_);
+  }
+
+  void show_for(QToolButton* anchor) {
+    if (anchor == nullptr) {
+      return;
+    }
+
+    rebuild_root();
+    setFixedWidth(210);
+    adjustSize();
+
+    const QPoint anchor_bottom_right =
+        anchor->mapToGlobal(QPoint(anchor->width(), anchor->height()));
+
+    const QPoint anchor_bottom_center =
+        anchor->mapToGlobal(
+            QPoint(anchor->width() / 2, anchor->height()));
+
+    int popup_x = anchor_bottom_right.x() - width();
+    int popup_y = anchor_bottom_right.y() + 1;
+
+    if (auto* screen = anchor->screen(); screen != nullptr) {
+      const QRect available = screen->availableGeometry();
+
+      popup_x = std::clamp(
+          popup_x,
+          available.left() + 8,
+          available.right() - width() - 8);
+    }
+
+    arrow_x_ = std::clamp<qreal>(
+        static_cast<qreal>(anchor_bottom_center.x() - popup_x),
+        24.0,
+        static_cast<qreal>(width()) - 24.0);
+
+    move(popup_x, popup_y);
+    update();
+
+    show();
+    raise();
+    setFocus(Qt::PopupFocusReason);
+  }
+
+ protected:
+  void paintEvent(QPaintEvent*) override {
+    /*
+       GTK4 GtkPopover shape:
+
+           arrow
+             ▲
+          ╭──┴──────────────╮
+          │    contents     │
+          ╰─────────────────╯
+
+       The arrow, body, border and shadow are painted as ONE path. That is the
+       important difference from a rounded QFrame with a triangle stuck on top.
+    */
+
+    const auto& colors = theme();
+
+    constexpr qreal kShadowInset = 5.0;
+    constexpr qreal kArrowHeight = 9.0;
+    constexpr qreal kArrowHalfWidth = 8.0;
+    constexpr qreal kRadius = 12.0;
+
+    const QRectF body(
+        kShadowInset,
+        kShadowInset + kArrowHeight,
+        width() - (kShadowInset * 2.0),
+        height() - (kShadowInset * 2.0) - kArrowHeight);
+
+    const qreal tip_x = std::clamp(
+        arrow_x_,
+        body.left() + kRadius + kArrowHalfWidth,
+        body.right() - kRadius - kArrowHalfWidth);
+
+    const qreal tip_y = kShadowInset;
+    const qreal top = body.top();
+    const qreal right = body.right();
+    const qreal bottom = body.bottom();
+    const qreal left = body.left();
+
+    QPainterPath bubble;
+
+    bubble.moveTo(left + kRadius, top);
+
+    bubble.lineTo(tip_x - kArrowHalfWidth, top);
+
+    /*
+       Slightly curved shoulders mimic GTK custom arrow rendering instead of
+       looking like a raw CSS triangle.
+    */
+    bubble.cubicTo(
+        tip_x - 5.0,
+        top,
+        tip_x - 4.0,
+        tip_y + 1.5,
+        tip_x,
+        tip_y);
+
+    bubble.cubicTo(
+        tip_x + 4.0,
+        tip_y + 1.5,
+        tip_x + 5.0,
+        top,
+        tip_x + kArrowHalfWidth,
+        top);
+
+    bubble.lineTo(right - kRadius, top);
+
+    bubble.quadTo(
+        right,
+        top,
+        right,
+        top + kRadius);
+
+    bubble.lineTo(right, bottom - kRadius);
+
+    bubble.quadTo(
+        right,
+        bottom,
+        right - kRadius,
+        bottom);
+
+    bubble.lineTo(left + kRadius, bottom);
+
+    bubble.quadTo(
+        left,
+        bottom,
+        left,
+        bottom - kRadius);
+
+    bubble.lineTo(left, top + kRadius);
+
+    bubble.quadTo(
+        left,
+        top,
+        left + kRadius,
+        top);
+
+    bubble.closeSubpath();
+
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+
+    /*
+       GTK applies the visible shadow to contents while the arrow is custom
+       drawn over it. Here both pieces are one path, so one shadow follows the
+       exact speech-bubble silhouette.
+    */
+    QColor shadow = colors.menu_border;
+    shadow.setAlpha(90);
+
+    QPen shadow_pen(shadow);
+    shadow_pen.setWidthF(7.0);
+    shadow_pen.setJoinStyle(Qt::RoundJoin);
+    shadow_pen.setCapStyle(Qt::RoundCap);
+
+    painter.save();
+    painter.translate(0.0, 1.5);
+    painter.setBrush(Qt::NoBrush);
+    painter.setPen(shadow_pen);
+    painter.drawPath(bubble);
+    painter.restore();
+
+    painter.setBrush(colors.menu_bg);
+
+    QPen border_pen(colors.menu_border);
+    border_pen.setWidthF(1.0);
+    border_pen.setJoinStyle(Qt::RoundJoin);
+
+    painter.setPen(border_pen);
+    painter.drawPath(bubble);
+  }
+
+ private:
+  static QString display_text(QString text) {
+    text.remove(QLatin1Char('&'));
+    text.replace(QStringLiteral("..."), QStringLiteral("…"));
+    return text.trimmed();
+  }
+
+  QAction* find_action(const char* name) const {
+    return action_root_ == nullptr
+               ? nullptr
+               : action_root_->findChild<QAction*>(QString::fromLatin1(name));
+  }
+
+  QMenu* find_menu(const char* name) const {
+    return action_root_ == nullptr
+               ? nullptr
+               : action_root_->findChild<QMenu*>(QString::fromLatin1(name));
+  }
+
+  QWidget* create_page() {
+    auto* page = new QWidget(stack_);
+    page->setObjectName(QStringLiteral("gnomePrimaryMenuPage"));
+
+    auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(2);
+
+    return page;
+  }
+
+  QVBoxLayout* page_layout(QWidget* page) const {
+    return qobject_cast<QVBoxLayout*>(page == nullptr ? nullptr : page->layout());
+  }
+
+  void add_separator(QVBoxLayout* layout) {
+    if (layout == nullptr) {
+      return;
+    }
+
+    auto* separator = new QFrame;
+    separator->setProperty("gnomeMenuSeparator", true);
+    separator->setFrameShape(QFrame::NoFrame);
+    layout->addWidget(separator);
+  }
+
+  void add_action_row(QVBoxLayout* layout, QAction* action) {
+    if (layout == nullptr ||
+        action == nullptr ||
+        !action->isVisible()) {
+      return;
+    }
+
+    if (action->objectName() == QStringLiteral("fileCloseAction") ||
+        action->objectName() == QStringLiteral("fileCloseAllAction")) {
+      return;
+    }
+
+    QString shortcut;
+
+    if (!action->shortcut().isEmpty()) {
+      shortcut =
+          action->shortcut().toString(QKeySequence::NativeText);
+    }
+
+    auto* row = new GnomeMenuRowWidget(
+        display_text(action->text()),
+        shortcut,
+        false,
+        action->isEnabled(),
+        [this, action] {
+          hide();
+          action->trigger();
+        });
+
+    layout->addWidget(row);
+  }
+
+
+  void add_menu_row(QVBoxLayout* layout, QMenu* menu) {
+    if (layout == nullptr ||
+        menu == nullptr ||
+        !menu->menuAction()->isVisible()) {
+      return;
+    }
+
+    auto* row = new GnomeMenuRowWidget(
+        display_text(menu->title()),
+        QString(),
+        true,
+        menu->menuAction()->isEnabled(),
+        [this, menu] {
+          push_menu(menu);
+        });
+
+    layout->addWidget(row);
+  }
+
+
+  void add_page_header(QVBoxLayout* layout, const QString& title) {
+    if (layout == nullptr) {
+      return;
+    }
+
+    auto* header = new QWidget;
+    header->setObjectName(QStringLiteral("gnomeMenuPageHeader"));
+
+    auto* header_layout = new QHBoxLayout(header);
+    header_layout->setContentsMargins(0, 0, 0, 4);
+    header_layout->setSpacing(6);
+
+    auto* back = new QPushButton(QStringLiteral("‹"), header);
+    back->setObjectName(QStringLiteral("gnomeMenuBackButton"));
+    back->setFixedSize(28, 28);
+    back->setFocusPolicy(Qt::NoFocus);
+
+    auto* label = new QLabel(display_text(title), header);
+    label->setObjectName(QStringLiteral("gnomeMenuPageTitle"));
+    label->setAlignment(Qt::AlignCenter);
+
+    auto* balance = new QWidget(header);
+    balance->setFixedWidth(28);
+    balance->setAttribute(Qt::WA_TransparentForMouseEvents);
+
+    header_layout->addWidget(back);
+    header_layout->addWidget(label, 1);
+    header_layout->addWidget(balance);
+
+    connect(back, &QPushButton::clicked, this, [this] {
+      pop_page();
+    });
+
+    layout->addWidget(header);
+  }
+
+  QWidget* build_menu_page(QMenu* menu) {
+    auto* page = create_page();
+    auto* layout = page_layout(page);
+
+    add_page_header(layout, menu == nullptr ? QString() : menu->title());
+
+    if (menu == nullptr) {
+      return page;
+    }
+
+    QMetaObject::invokeMethod(menu, "aboutToShow", Qt::DirectConnection);
+
+    for (auto* action : menu->actions()) {
+      if (action == nullptr || !action->isVisible()) {
+        continue;
+      }
+
+      if (action->isSeparator()) {
+        add_separator(layout);
+      } else if (action->menu() != nullptr) {
+        add_menu_row(layout, action->menu());
+      } else {
+        add_action_row(layout, action);
+      }
+    }
+
+    return page;
+  }
+
+  void push_menu(QMenu* menu) {
+    auto* page = build_menu_page(menu);
+    stack_->addWidget(page);
+    stack_->setCurrentWidget(page);
+    adjustSize();
+  }
+
+  void pop_page() {
+    if (stack_->count() <= 1) {
+      return;
+    }
+
+    auto* current = stack_->currentWidget();
+    stack_->setCurrentIndex(stack_->count() - 2);
+    stack_->removeWidget(current);
+    current->deleteLater();
+    adjustSize();
+  }
+
+  void rebuild_root() {
+    while (stack_->count() > 0) {
+      auto* page = stack_->widget(0);
+      stack_->removeWidget(page);
+      page->deleteLater();
+    }
+
+    auto* root = create_page();
+    auto* layout = page_layout(root);
+
+    /*
+       Same primary-menu hierarchy used by Vinilo/GNOME:
+       the hamburger contains APPLICATION actions, not the complete
+       desktop-editor menubar.
+    */
+
+    add_action_row(layout, find_action("fileNewAction"));
+    add_action_row(layout, find_action("fileOpenAction"));
+
+    add_separator(layout);
+
+    /*
+       Lienzo is substantially more complex than Vinilo. Keep the complete
+       editor command surface available, but put it behind one navigation row
+       rather than turning the primary menu into a Photoshop menubar.
+    */
+    auto* editor_menu = new QMenu(QStringLiteral("Editor"), root);
+
+    static constexpr std::array<const char*, 10> kEditorMenus = {
+        "fileMenu",
+        "editMenu",
+        "imageMenu",
+        "layerMenu",
+        "typeMenu",
+        "selectMenu",
+        "filterMenu",
+        "pluginsMenu",
+        "viewMenu",
+        "windowMenu",
+    };
+
+    for (const auto* name : kEditorMenus) {
+      if (auto* menu = find_menu(name); menu != nullptr) {
+        editor_menu->addAction(menu->menuAction());
+      }
+    }
+
+    add_menu_row(layout, editor_menu);
+
+    add_separator(layout);
+
+    add_action_row(layout, find_action("filePreferencesAction"));
+    add_action_row(layout, find_action("helpAboutAction"));
+
+    add_separator(layout);
+
+    add_action_row(layout, find_action("fileQuitAction"));
+
+    stack_->addWidget(root);
+    stack_->setCurrentWidget(root);
+  }
+
+  qreal arrow_x_ = 105.0;
+  QWidget* action_root_ = nullptr;
+  QMenuBar* menu_bar_ = nullptr;
+  QStackedWidget* stack_ = nullptr;
+};
+
+#endif
+
 
 Qt::Edges resize_edges_for_window_position(QSize window_size, QPoint position) {
   Qt::Edges edges;
@@ -360,7 +1073,7 @@ void apply_windows_pen_feedback_suppression(WId window_id) {
 }  // namespace
 
 bool MainWindow::use_custom_window_chrome() {
-#ifdef Q_OS_WIN
+#if defined(Q_OS_WIN) || defined(Q_OS_LINUX)
   return true;
 #else
   return false;
@@ -433,6 +1146,16 @@ bool MainWindow::handle_window_resize_event(QObject* watched, QEvent* event) {
       edges == Qt::Edges{}) {
     return false;
   }
+
+#ifndef Q_OS_WIN
+  // Wayland compositors own interactive resizing. Asking the compositor
+  // avoids client-side geometry hacks and behaves like a native GNOME CSD.
+  if (auto* handle = windowHandle();
+      handle != nullptr && handle->startSystemResize(edges)) {
+    mouse_event->accept();
+    return true;
+  }
+#endif
 
   chrome_resize_edges_ = edges;
   chrome_resize_start_global_ = mouse_event->globalPosition().toPoint();
@@ -822,6 +1545,121 @@ void MainWindow::configure_window_chrome() {
     return;
   }
   auto* bar = menuBar();
+#ifdef Q_OS_LINUX
+  /*
+     Linux uses a real client-side GNOME-style header bar.
+
+     The original QMenuBar remains alive as the owner of all existing
+     top-level menus, but is removed visually. The menu actions are exposed
+     from one primary-menu button instead.
+  */
+  bar->setNativeMenuBar(false);
+
+  auto* header = new AdwaitaHeaderBar(this);
+
+  if (auto* options = findChild<QToolBar*>(QStringLiteral("Options"));
+      options != nullptr) {
+    // HeaderBar gets its own full-width row. Tool options live below it.
+    insertToolBar(options, header);
+    insertToolBarBreak(options);
+  } else {
+    addToolBar(Qt::TopToolBarArea, header);
+    addToolBarBreak(Qt::TopToolBarArea);
+  }
+
+  auto* app_popover = new GnomePrimaryMenuPopover(this, bar, header);
+
+  bar->hide();
+
+  // Balance the controls on the right so the title remains truly centered.
+  auto* left_balance = new QWidget(header);
+  left_balance->setObjectName(QStringLiteral("adwaitaHeaderBalance"));
+  left_balance->setFixedWidth(60);
+  left_balance->setAttribute(Qt::WA_TransparentForMouseEvents);
+  header->addWidget(left_balance);
+
+  auto* left_stretch = new QWidget(header);
+  left_stretch->setObjectName(QStringLiteral("adwaitaHeaderStretch"));
+  left_stretch->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+  left_stretch->setAttribute(Qt::WA_TransparentForMouseEvents);
+  header->addWidget(left_stretch);
+
+  auto* title = new QLabel(header);
+  title->setObjectName(QStringLiteral("adwaitaHeaderTitle"));
+  title->setAlignment(Qt::AlignCenter);
+
+  QString header_title = QApplication::applicationDisplayName().trimmed();
+  if (header_title.isEmpty()) {
+    header_title = QApplication::applicationName().trimmed();
+  }
+  if (header_title.isEmpty()) {
+    header_title = QStringLiteral("Lienzo");
+  }
+
+  title->setText(header_title);
+  title->setAttribute(Qt::WA_TransparentForMouseEvents);
+  header->addWidget(title);
+
+  auto* right_stretch = new QWidget(header);
+  right_stretch->setObjectName(QStringLiteral("adwaitaHeaderStretch"));
+  right_stretch->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+  right_stretch->setAttribute(Qt::WA_TransparentForMouseEvents);
+  header->addWidget(right_stretch);
+
+  auto* menu_button = new QToolButton(header);
+  menu_button->setObjectName(QStringLiteral("headerMenuButton"));
+  menu_button->setAutoRaise(false);
+  menu_button->setFocusPolicy(Qt::NoFocus);
+  menu_button->setFixedSize(30, 30);
+
+  const auto menu_icon =
+      QIcon::fromTheme(QStringLiteral("open-menu-symbolic"));
+
+  if (!menu_icon.isNull()) {
+    menu_button->setIcon(menu_icon);
+    menu_button->setIconSize(QSize(16, 16));
+  } else {
+    menu_button->setText(QStringLiteral("☰"));
+  }
+
+  header->addWidget(menu_button);
+
+  connect(menu_button, &QToolButton::clicked, app_popover,
+          [app_popover, menu_button] {
+            app_popover->show_for(menu_button);
+          });
+
+  auto* gnome_close_button = new QToolButton(header);
+  gnome_close_button->setObjectName(QStringLiteral("windowCloseButton"));
+  gnome_close_button->setProperty("windowChromeButton", true);
+  gnome_close_button->setFocusPolicy(Qt::NoFocus);
+  gnome_close_button->setFixedSize(28, 28);
+
+  auto close_icon =
+      QIcon::fromTheme(QStringLiteral("window-close-symbolic"));
+
+  if (close_icon.isNull()) {
+    close_icon = window_chrome_icon(QStringLiteral("close"));
+  }
+
+  gnome_close_button->setIcon(close_icon);
+  gnome_close_button->setIconSize(QSize(16, 16));
+
+  bind_tooltip(
+      gnome_close_button,
+      QT_TRANSLATE_NOOP("patchy::ui::MainWindow", "Close"));
+
+  header->addWidget(gnome_close_button);
+
+  connect(
+      gnome_close_button,
+      &QToolButton::clicked,
+      this,
+      &QWidget::close);
+
+  return;
+#endif
+
   bar->setNativeMenuBar(false);
   bar->setFixedHeight(34);
   bar->installEventFilter(this);
