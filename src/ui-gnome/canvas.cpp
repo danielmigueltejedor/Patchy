@@ -2,6 +2,8 @@
 #include "ui-gnome/brush_tips.hpp"
 #include "ui-gnome/tools/selection_controller.hpp"
 #include "ui-gnome/tools/text_controller.hpp"
+#include "ui-gnome/tools/path_controller.hpp"
+#include "ui-gnome/tools/retouch_controller.hpp"
 
 #include "core/layer_metadata.hpp"
 #include "core/magnetic_lasso.hpp"
@@ -26,7 +28,35 @@ namespace {
 struct CanvasState {
   patchy::Document* document{};
   GtkDrawingArea* area{};
-  GdkPixbuf* pixbuf{};
+
+  cairo_surface_t* canvas_surface{};
+
+  std::vector<std::uint8_t>
+      composite_rgba;
+
+  int composite_width{0};
+  int composite_height{0};
+  int composite_stride{0};
+
+  struct MovePreviewState {
+    bool active{false};
+    bool fast_surface{false};
+
+    patchy::LayerId layer_id{};
+    patchy::Rect original_bounds{};
+    patchy::Rect base_patch_bounds{};
+
+    double anchor_x{0.0};
+    double anchor_y{0.0};
+
+    int dx{0};
+    int dy{0};
+
+    cairo_surface_t* base_patch_surface{};
+    cairo_surface_t* layer_surface{};
+  };
+
+  MovePreviewState move_preview;
 
   Tool tool{Tool::Brush};
 
@@ -62,6 +92,21 @@ struct CanvasState {
   bool crop_session_active{false};
   patchy::Rect crop_rect{};
 
+  bool zoom_marquee_active{false};
+  double zoom_marquee_start_x{0.0};
+  double zoom_marquee_start_y{0.0};
+  double zoom_marquee_end_x{0.0};
+  double zoom_marquee_end_y{0.0};
+
+  bool shape_preview_active{false};
+
+  double shape_preview_start_x{0.0};
+  double shape_preview_start_y{0.0};
+  double shape_preview_end_x{0.0};
+  double shape_preview_end_y{0.0};
+
+  int polygon_sides{5};
+
   SelectionController selection;
   SelectionCombine selection_combine{
       SelectionCombine::Replace};
@@ -90,6 +135,12 @@ struct CanvasState {
 
   std::unique_ptr<TextController>
       text_controller;
+
+  std::unique_ptr<RetouchController>
+      retouch_controller;
+
+  std::unique_ptr<PathController>
+      path_controller;
 
   int brush_opacity{100};
   int brush_flow{100};
@@ -153,14 +204,44 @@ struct CanvasState {
           selection_animation_timer);
     }
 
-    if (pixbuf != nullptr) {
-      g_object_unref(pixbuf);
+    if (
+        move_preview.base_patch_surface !=
+        nullptr) {
+      cairo_surface_destroy(
+          move_preview.base_patch_surface);
+    }
+
+    if (
+        move_preview.layer_surface !=
+        nullptr) {
+      cairo_surface_destroy(
+          move_preview.layer_surface);
+    }
+
+    if (canvas_surface != nullptr) {
+      cairo_surface_destroy(
+          canvas_surface);
     }
   }
 };
 
 void sync_selection_to_edit_options(
     CanvasState* state);
+
+bool canvas_cache_ready(
+    const CanvasState* state) {
+  return
+      state->canvas_surface != nullptr &&
+      state->composite_width > 0 &&
+      state->composite_height > 0 &&
+      state->composite_stride ==
+          state->composite_width * 4 &&
+      state->composite_rgba.size() >=
+          static_cast<std::size_t>(
+              state->composite_stride) *
+              static_cast<std::size_t>(
+                  state->composite_height);
+}
 
 void cancel_magnetic_lasso(
     CanvasState* state) {
@@ -186,51 +267,21 @@ bool start_magnetic_lasso(
     int x,
     int y,
     SelectionCombine combine) {
-  if (
-      state->pixbuf == nullptr ||
-      gdk_pixbuf_get_n_channels(
-          state->pixbuf) != 4) {
+  if (!canvas_cache_ready(state)) {
     return false;
   }
 
   const int width =
-      gdk_pixbuf_get_width(
-          state->pixbuf);
+      state->composite_width;
 
   const int height =
-      gdk_pixbuf_get_height(
-          state->pixbuf);
-
-  const int source_stride =
-      gdk_pixbuf_get_rowstride(
-          state->pixbuf);
+      state->composite_height;
 
   const int target_stride =
-      width * 4;
+      state->composite_stride;
 
-  state->magnetic_source_rgba.resize(
-      static_cast<std::size_t>(
-          target_stride) *
-      static_cast<std::size_t>(
-          height));
-
-  const auto* source =
-      gdk_pixbuf_get_pixels(
-          state->pixbuf);
-
-  for (int row = 0;
-       row < height;
-       ++row) {
-    std::memcpy(
-        state->magnetic_source_rgba.data() +
-            static_cast<std::size_t>(row) *
-                target_stride,
-        source +
-            static_cast<std::size_t>(row) *
-                source_stride,
-        static_cast<std::size_t>(
-            target_stride));
-  }
+  state->magnetic_source_rgba =
+      state->composite_rgba;
 
   state->magnetic_engine.set_image(
       state->magnetic_source_rgba.data(),
@@ -617,67 +668,113 @@ std::optional<patchy::LayerId> editing_layer(
   return layer->id();
 }
 
-void ensure_pixbuf_storage(
+void ensure_canvas_storage(
     CanvasState* state,
     int width,
     int height) {
+  if (
+      width <= 0 ||
+      height <= 0) {
+    return;
+  }
+
   const bool correct_size =
-      state->pixbuf != nullptr &&
-      gdk_pixbuf_get_width(
-          state->pixbuf) == width &&
-      gdk_pixbuf_get_height(
-          state->pixbuf) == height;
+      state->canvas_surface != nullptr &&
+      state->composite_width == width &&
+      state->composite_height == height;
 
   if (correct_size) {
     return;
   }
 
-  if (state->pixbuf != nullptr) {
-    g_object_unref(
-        state->pixbuf);
+  if (state->canvas_surface != nullptr) {
+    cairo_surface_destroy(
+        state->canvas_surface);
 
-    state->pixbuf = nullptr;
+    state->canvas_surface = nullptr;
   }
 
-  state->pixbuf =
-      gdk_pixbuf_new(
-          GDK_COLORSPACE_RGB,
-          TRUE,
-          8,
+  state->composite_width =
+      width;
+
+  state->composite_height =
+      height;
+
+  state->composite_stride =
+      width * 4;
+
+  state->composite_rgba.assign(
+      static_cast<std::size_t>(
+          state->composite_stride) *
+          static_cast<std::size_t>(
+              height),
+      0);
+
+  state->canvas_surface =
+      cairo_image_surface_create(
+          CAIRO_FORMAT_ARGB32,
           width,
           height);
 }
 
-void write_composite_region(
-    CanvasState* state,
+std::uint8_t premultiply_channel(
+    std::uint8_t value,
+    std::uint8_t alpha) {
+  return static_cast<std::uint8_t>(
+      (
+          static_cast<unsigned int>(
+              value) *
+              static_cast<unsigned int>(
+                  alpha) +
+          127U) /
+      255U);
+}
+
+
+cairo_surface_t*
+make_move_preview_composite_surface(
     const patchy::PixelBuffer& rgb,
-    const std::vector<std::uint8_t>& alpha,
-    patchy::Rect region) {
-  if (
-      state->pixbuf == nullptr ||
-      rgb.empty()) {
-    return;
+    const std::vector<std::uint8_t>& alpha) {
+  if (rgb.empty()) {
+    return nullptr;
   }
 
-  auto* destination =
-      gdk_pixbuf_get_pixels(
-          state->pixbuf);
+  cairo_surface_t* surface =
+      cairo_image_surface_create(
+          CAIRO_FORMAT_ARGB32,
+          rgb.width(),
+          rgb.height());
 
-  const int destination_stride =
-      gdk_pixbuf_get_rowstride(
-          state->pixbuf);
+  if (
+      surface == nullptr ||
+      cairo_surface_status(surface) !=
+          CAIRO_STATUS_SUCCESS) {
+    if (surface != nullptr) {
+      cairo_surface_destroy(surface);
+    }
+
+    return nullptr;
+  }
+
+  cairo_surface_flush(surface);
+
+  auto* data =
+      cairo_image_surface_get_data(
+          surface);
+
+  const int stride =
+      cairo_image_surface_get_stride(
+          surface);
 
   for (int y = 0;
        y < rgb.height();
        ++y) {
     auto* row =
-        destination +
-        static_cast<std::size_t>(
-            region.y + y) *
-            destination_stride +
-        static_cast<std::size_t>(
-            region.x) *
-            4;
+        reinterpret_cast<std::uint32_t*>(
+            data +
+            static_cast<std::size_t>(y) *
+                static_cast<std::size_t>(
+                    stride));
 
     for (int x = 0;
          x < rgb.width();
@@ -691,24 +788,298 @@ void write_composite_region(
                   rgb.width()) +
           static_cast<std::size_t>(x);
 
-      row[x * 4 + 0] =
-          source[0];
-
-      row[x * 4 + 1] =
-          source[1];
-
-      row[x * 4 + 2] =
-          source[2];
-
-      row[x * 4 + 3] =
+      const std::uint8_t a =
           index < alpha.size()
               ? alpha[index]
               : 255;
+
+      const auto r =
+          premultiply_channel(
+              source[0],
+              a);
+
+      const auto g =
+          premultiply_channel(
+              source[1],
+              a);
+
+      const auto b =
+          premultiply_channel(
+              source[2],
+              a);
+
+      row[x] =
+          (
+              static_cast<std::uint32_t>(a)
+                  << 24U) |
+          (
+              static_cast<std::uint32_t>(r)
+                  << 16U) |
+          (
+              static_cast<std::uint32_t>(g)
+                  << 8U) |
+          static_cast<std::uint32_t>(b);
     }
   }
+
+  cairo_surface_mark_dirty(surface);
+
+  return surface;
 }
 
-void rebuild_pixbuf(
+cairo_surface_t*
+make_move_preview_layer_surface(
+    const patchy::Layer& layer) {
+  const auto& pixels =
+      layer.pixels();
+
+  if (pixels.empty()) {
+    return nullptr;
+  }
+
+  const auto format =
+      pixels.format();
+
+  if (
+      format.color_mode !=
+          patchy::ColorMode::RGB ||
+      format.bit_depth !=
+          patchy::BitDepth::UInt8 ||
+      (
+          format.channels != 3 &&
+          format.channels != 4)) {
+    return nullptr;
+  }
+
+  cairo_surface_t* surface =
+      cairo_image_surface_create(
+          CAIRO_FORMAT_ARGB32,
+          pixels.width(),
+          pixels.height());
+
+  if (
+      surface == nullptr ||
+      cairo_surface_status(surface) !=
+          CAIRO_STATUS_SUCCESS) {
+    if (surface != nullptr) {
+      cairo_surface_destroy(surface);
+    }
+
+    return nullptr;
+  }
+
+  cairo_surface_flush(surface);
+
+  auto* destination =
+      cairo_image_surface_get_data(
+          surface);
+
+  const int destination_stride =
+      cairo_image_surface_get_stride(
+          surface);
+
+  const auto* source =
+      pixels.data().data();
+
+  const std::size_t source_stride =
+      pixels.stride_bytes();
+
+  const auto channels =
+      static_cast<std::size_t>(
+          format.channels);
+
+  const float layer_alpha =
+      std::clamp(
+          layer.opacity() *
+              layer.fill_opacity(),
+          0.0F,
+          1.0F);
+
+  for (int y = 0;
+       y < pixels.height();
+       ++y) {
+    const auto* source_row =
+        source +
+        static_cast<std::size_t>(y) *
+            source_stride;
+
+    auto* destination_row =
+        reinterpret_cast<std::uint32_t*>(
+            destination +
+            static_cast<std::size_t>(y) *
+                static_cast<std::size_t>(
+                    destination_stride));
+
+    for (int x = 0;
+         x < pixels.width();
+         ++x) {
+      const auto* pixel =
+          source_row +
+          static_cast<std::size_t>(x) *
+              channels;
+
+      const std::uint8_t source_alpha =
+          format.channels >= 4
+              ? pixel[3]
+              : 255;
+
+      const std::uint8_t a =
+          static_cast<std::uint8_t>(
+              std::clamp(
+                  std::lround(
+                      static_cast<double>(
+                          source_alpha) *
+                      layer_alpha),
+                  0L,
+                  255L));
+
+      const auto r =
+          premultiply_channel(
+              pixel[0],
+              a);
+
+      const auto g =
+          premultiply_channel(
+              pixel[1],
+              a);
+
+      const auto b =
+          premultiply_channel(
+              pixel[2],
+              a);
+
+      destination_row[x] =
+          (
+              static_cast<std::uint32_t>(a)
+                  << 24U) |
+          (
+              static_cast<std::uint32_t>(r)
+                  << 16U) |
+          (
+              static_cast<std::uint32_t>(g)
+                  << 8U) |
+          static_cast<std::uint32_t>(b);
+    }
+  }
+
+  cairo_surface_mark_dirty(surface);
+
+  return surface;
+}
+
+void write_composite_region(
+    CanvasState* state,
+    const patchy::PixelBuffer& rgb,
+    const std::vector<std::uint8_t>& alpha,
+    patchy::Rect region) {
+  if (
+      !canvas_cache_ready(state) ||
+      rgb.empty()) {
+    return;
+  }
+
+  cairo_surface_flush(
+      state->canvas_surface);
+
+  auto* surface_data =
+      cairo_image_surface_get_data(
+          state->canvas_surface);
+
+  const int surface_stride =
+      cairo_image_surface_get_stride(
+          state->canvas_surface);
+
+  for (int y = 0;
+       y < rgb.height();
+       ++y) {
+    auto* rgba_row =
+        state->composite_rgba.data() +
+        static_cast<std::size_t>(
+            region.y + y) *
+            static_cast<std::size_t>(
+                state->composite_stride) +
+        static_cast<std::size_t>(
+            region.x) *
+            4;
+
+    auto* surface_row =
+        reinterpret_cast<std::uint32_t*>(
+            surface_data +
+            static_cast<std::size_t>(
+                region.y + y) *
+                static_cast<std::size_t>(
+                    surface_stride));
+
+    for (int x = 0;
+         x < rgb.width();
+         ++x) {
+      const auto* source =
+          rgb.pixel(x, y);
+
+      const std::size_t index =
+          static_cast<std::size_t>(y) *
+              static_cast<std::size_t>(
+                  rgb.width()) +
+          static_cast<std::size_t>(x);
+
+      const std::uint8_t a =
+          index < alpha.size()
+              ? alpha[index]
+              : 255;
+
+      const std::uint8_t r =
+          source[0];
+
+      const std::uint8_t g =
+          source[1];
+
+      const std::uint8_t b =
+          source[2];
+
+      rgba_row[x * 4 + 0] = r;
+      rgba_row[x * 4 + 1] = g;
+      rgba_row[x * 4 + 2] = b;
+      rgba_row[x * 4 + 3] = a;
+
+      const std::uint8_t pr =
+          premultiply_channel(
+              r,
+              a);
+
+      const std::uint8_t pg =
+          premultiply_channel(
+              g,
+              a);
+
+      const std::uint8_t pb =
+          premultiply_channel(
+              b,
+              a);
+
+      surface_row[
+          region.x + x] =
+          (
+              static_cast<std::uint32_t>(a)
+                  << 24U) |
+          (
+              static_cast<std::uint32_t>(pr)
+                  << 16U) |
+          (
+              static_cast<std::uint32_t>(pg)
+                  << 8U) |
+          static_cast<std::uint32_t>(pb);
+    }
+  }
+
+  cairo_surface_mark_dirty_rectangle(
+      state->canvas_surface,
+      region.x,
+      region.y,
+      rgb.width(),
+      rgb.height());
+}
+
+void rebuild_canvas_cache(
     CanvasState* state) {
   std::vector<std::uint8_t> alpha;
 
@@ -717,7 +1088,7 @@ void rebuild_pixbuf(
           *state->document,
           &alpha);
 
-  ensure_pixbuf_storage(
+  ensure_canvas_storage(
       state,
       rgb.width(),
       rgb.height());
@@ -733,7 +1104,7 @@ void rebuild_pixbuf(
           rgb.height()});
 }
 
-void rebuild_pixbuf_region(
+void rebuild_canvas_cache_region(
     CanvasState* state,
     patchy::Rect dirty) {
   const patchy::Rect canvas =
@@ -751,14 +1122,14 @@ void rebuild_pixbuf_region(
   }
 
   if (
-      state->pixbuf == nullptr ||
-      gdk_pixbuf_get_width(
-          state->pixbuf) !=
+      !canvas_cache_ready(state) ||
+      state->composite_width !=
           state->document->width() ||
-      gdk_pixbuf_get_height(
-          state->pixbuf) !=
+      state->composite_height !=
           state->document->height()) {
-    rebuild_pixbuf(state);
+    rebuild_canvas_cache(
+        state);
+
     return;
   }
 
@@ -845,10 +1216,10 @@ gboolean flush_canvas_refresh(
       state->full_refresh_pending ||
       !state->pending_dirty_rect
            .has_value()) {
-    rebuild_pixbuf(
+    rebuild_canvas_cache(
         state);
   } else {
-    rebuild_pixbuf_region(
+    rebuild_canvas_cache_region(
         state,
         *state->pending_dirty_rect);
   }
@@ -886,6 +1257,319 @@ void push_history(
   }
 
   state->redo_stack.clear();
+}
+
+
+void move_active_layer(
+    CanvasState* state,
+    int dx,
+    int dy);
+
+void clear_move_preview(
+    CanvasState* state) {
+  auto& preview =
+      state->move_preview;
+
+  if (
+      preview.base_patch_surface !=
+      nullptr) {
+    cairo_surface_destroy(
+        preview.base_patch_surface);
+  }
+
+  if (
+      preview.layer_surface !=
+      nullptr) {
+    cairo_surface_destroy(
+        preview.layer_surface);
+  }
+
+  preview =
+      CanvasState::MovePreviewState{};
+}
+
+void cancel_move_preview(
+    CanvasState* state) {
+  if (!state->move_preview.active) {
+    return;
+  }
+
+  clear_move_preview(state);
+
+  gtk_widget_queue_draw(
+      GTK_WIDGET(state->area));
+}
+
+bool move_layer_supports_fast_preview(
+    const patchy::Layer& layer) {
+  if (
+      !layer.visible() ||
+      (
+          layer.kind() !=
+              patchy::LayerKind::Pixel &&
+          layer.kind() !=
+              patchy::LayerKind::Text)) {
+    return false;
+  }
+
+  const auto& pixels =
+      layer.pixels();
+
+  if (pixels.empty()) {
+    return false;
+  }
+
+  const auto format =
+      pixels.format();
+
+  const auto bounds =
+      layer.bounds();
+
+  return
+      format.color_mode ==
+          patchy::ColorMode::RGB &&
+      format.bit_depth ==
+          patchy::BitDepth::UInt8 &&
+      (
+          format.channels == 3 ||
+          format.channels == 4) &&
+      pixels.width() ==
+          bounds.width &&
+      pixels.height() ==
+          bounds.height &&
+      layer.blend_mode() ==
+          patchy::BlendMode::Normal &&
+      !layer.clipped() &&
+      !layer.mask().has_value() &&
+      layer.vector_mask() == nullptr &&
+      layer.layer_style().empty() &&
+      layer.smart_filter_stack() == nullptr;
+}
+
+bool begin_move_preview(
+    CanvasState* state,
+    double document_x,
+    double document_y) {
+  clear_move_preview(state);
+
+  const auto active =
+      state->document->active_layer_id();
+
+  if (!active.has_value()) {
+    return false;
+  }
+
+  if (
+      patchy::layer_effectively_locks_position(
+          state->document->layers(),
+          *active)) {
+    return false;
+  }
+
+  const auto* layer =
+      state->document->find_layer(
+          *active);
+
+  if (layer == nullptr) {
+    return false;
+  }
+
+  auto& preview =
+      state->move_preview;
+
+  preview.active = true;
+  preview.layer_id = *active;
+  preview.original_bounds =
+      layer->bounds();
+  preview.anchor_x = document_x;
+  preview.anchor_y = document_y;
+
+  // Complex layers still use a deferred move, but get a
+  // lightweight outline instead of recompositing at pointer rate.
+  if (
+      !canvas_cache_ready(state) ||
+      !move_layer_supports_fast_preview(
+          *layer)) {
+    return true;
+  }
+
+  cairo_surface_t* layer_surface =
+      make_move_preview_layer_surface(
+          *layer);
+
+  if (layer_surface == nullptr) {
+    return true;
+  }
+
+  const patchy::Rect canvas =
+      patchy::Rect::from_size(
+          state->document->width(),
+          state->document->height());
+
+  const patchy::Rect old_clip =
+      patchy::intersect_rect(
+          preview.original_bounds,
+          canvas);
+
+  cairo_surface_t* base_surface =
+      nullptr;
+
+  if (!old_clip.empty()) {
+    // Document/PixelBuffer copies are COW. We can hide the
+    // active layer in a temporary snapshot without touching the
+    // live Document or copying all pixel payloads.
+    patchy::Document base_document =
+        *state->document;
+
+    auto* base_layer =
+        base_document.find_layer(
+            *active);
+
+    if (base_layer == nullptr) {
+      cairo_surface_destroy(
+          layer_surface);
+
+      return true;
+    }
+
+    base_layer->set_visible(false);
+
+    std::vector<std::uint8_t> alpha;
+
+    const auto rgb =
+        patchy::Compositor{}
+            .flatten_rgb8_region(
+                base_document,
+                old_clip,
+                &alpha);
+
+    base_surface =
+        make_move_preview_composite_surface(
+            rgb,
+            alpha);
+
+    if (base_surface == nullptr) {
+      cairo_surface_destroy(
+          layer_surface);
+
+      return true;
+    }
+  }
+
+  preview.layer_surface =
+      layer_surface;
+
+  preview.base_patch_surface =
+      base_surface;
+
+  preview.base_patch_bounds =
+      old_clip;
+
+  preview.fast_surface =
+      true;
+
+  return true;
+}
+
+void update_move_preview(
+    CanvasState* state,
+    double widget_offset_x,
+    double widget_offset_y) {
+  auto& preview =
+      state->move_preview;
+
+  if (!preview.active) {
+    return;
+  }
+
+  const double safe_zoom =
+      std::max(
+          0.0001,
+          state->zoom);
+
+  const int dx =
+      static_cast<int>(
+          std::lround(
+              widget_offset_x /
+              safe_zoom));
+
+  const int dy =
+      static_cast<int>(
+          std::lround(
+              widget_offset_y /
+              safe_zoom));
+
+  if (
+      dx == preview.dx &&
+      dy == preview.dy) {
+    return;
+  }
+
+  preview.dx = dx;
+  preview.dy = dy;
+
+  gtk_widget_queue_draw(
+      GTK_WIDGET(state->area));
+}
+
+void commit_move_preview(
+    CanvasState* state) {
+  if (!state->move_preview.active) {
+    return;
+  }
+
+  const auto preview =
+      state->move_preview;
+
+  if (
+      preview.dx == 0 &&
+      preview.dy == 0) {
+    cancel_move_preview(state);
+    return;
+  }
+
+  const auto active =
+      state->document->active_layer_id();
+
+  if (
+      !active.has_value() ||
+      *active != preview.layer_id ||
+      patchy::layer_effectively_locks_position(
+          state->document->layers(),
+          preview.layer_id)) {
+    cancel_move_preview(state);
+    return;
+  }
+
+  if (
+      state->document->find_layer(
+          preview.layer_id) == nullptr) {
+    cancel_move_preview(state);
+    return;
+  }
+
+  // History is created only for an actual committed move:
+  // click-without-motion no longer consumes an undo slot.
+  push_history(state);
+
+  const int dx =
+      preview.dx;
+
+  const int dy =
+      preview.dy;
+
+  // Remove the transient overlay before scheduling the real
+  // compositor refresh. Until that refresh fires we deliberately
+  // do not queue an intermediate frame, avoiding a one-frame snap
+  // back to the original cached position.
+  clear_move_preview(state);
+
+  move_active_layer(
+      state,
+      dx,
+      dy);
+
+  notify_document_changed(state);
 }
 
 void undo_document(
@@ -1311,8 +1995,12 @@ void set_tool_cursor(
     case Tool::Line:
     case Tool::Rectangle:
     case Tool::Ellipse:
-    case Tool::Eyedropper:
+    case Tool::Circle:
       name = "crosshair";
+      break;
+
+    case Tool::Eyedropper:
+      name = "none";
       break;
 
     default:
@@ -1360,6 +2048,510 @@ patchy::Rect normalized_document_rect(
           1,
           bottom - top)};
 }
+
+bool shape_drag_tool(
+    Tool tool) {
+  return
+      tool == Tool::Line ||
+      tool == Tool::Rectangle ||
+      tool == Tool::Ellipse ||
+      tool == Tool::Circle ||
+      tool == Tool::Polygon;
+}
+
+std::vector<CanvasPoint> polygon_vertices(
+    CanvasPoint center,
+    CanvasPoint edge,
+    int sides) {
+  sides =
+      std::clamp(
+          sides,
+          3,
+          32);
+
+  const double dx =
+      edge.x - center.x;
+
+  const double dy =
+      edge.y - center.y;
+
+  const double radius =
+      std::hypot(
+          dx,
+          dy);
+
+  if (radius < 0.5) {
+    return {};
+  }
+
+  const double start_angle =
+      std::atan2(
+          dy,
+          dx);
+
+  constexpr double pi =
+      3.14159265358979323846;
+
+  std::vector<CanvasPoint> points;
+
+  points.reserve(
+      static_cast<std::size_t>(
+          sides));
+
+  for (int i = 0;
+       i < sides;
+       ++i) {
+    const double angle =
+        start_angle +
+        2.0 * pi *
+            static_cast<double>(i) /
+            static_cast<double>(sides);
+
+    points.push_back(
+        CanvasPoint{
+            center.x +
+                std::cos(angle) *
+                    radius,
+            center.y +
+                std::sin(angle) *
+                    radius});
+  }
+
+  return points;
+}
+
+void append_ellipse_path(
+    cairo_t* cr,
+    double x,
+    double y,
+    double width,
+    double height) {
+  constexpr double kappa =
+      0.5522847498307936;
+
+  const double rx =
+      width * 0.5;
+
+  const double ry =
+      height * 0.5;
+
+  const double cx =
+      x + rx;
+
+  const double cy =
+      y + ry;
+
+  const double ox =
+      rx * kappa;
+
+  const double oy =
+      ry * kappa;
+
+  cairo_move_to(
+      cr,
+      cx + rx,
+      cy);
+
+  cairo_curve_to(
+      cr,
+      cx + rx,
+      cy + oy,
+      cx + ox,
+      cy + ry,
+      cx,
+      cy + ry);
+
+  cairo_curve_to(
+      cr,
+      cx - ox,
+      cy + ry,
+      cx - rx,
+      cy + oy,
+      cx - rx,
+      cy);
+
+  cairo_curve_to(
+      cr,
+      cx - rx,
+      cy - oy,
+      cx - ox,
+      cy - ry,
+      cx,
+      cy - ry);
+
+  cairo_curve_to(
+      cr,
+      cx + ox,
+      cy - ry,
+      cx + rx,
+      cy - oy,
+      cx + rx,
+      cy);
+
+  cairo_close_path(cr);
+}
+
+void draw_shape_preview(
+    CanvasState* state,
+    cairo_t* cr) {
+  if (
+      !state->shape_preview_active ||
+      !shape_drag_tool(
+          state->tool)) {
+    return;
+  }
+
+  const auto view =
+      geometry(state);
+
+  const CanvasPoint start{
+      state->shape_preview_start_x,
+      state->shape_preview_start_y};
+
+  const CanvasPoint end{
+      state->shape_preview_end_x,
+      state->shape_preview_end_y};
+
+  const auto widget_x =
+      [&view](double value) {
+        return
+            view.x +
+            value *
+                view.zoom;
+      };
+
+  const auto widget_y =
+      [&view](double value) {
+        return
+            view.y +
+            value *
+                view.zoom;
+      };
+
+  cairo_save(cr);
+  cairo_new_path(cr);
+
+  if (state->tool == Tool::Line) {
+    cairo_move_to(
+        cr,
+        widget_x(start.x),
+        widget_y(start.y));
+
+    cairo_line_to(
+        cr,
+        widget_x(end.x),
+        widget_y(end.y));
+
+  } else if (
+      state->tool ==
+      Tool::Rectangle) {
+    const double left =
+        widget_x(
+            std::min(
+                start.x,
+                end.x));
+
+    const double top =
+        widget_y(
+            std::min(
+                start.y,
+                end.y));
+
+    const double width =
+        std::abs(
+            end.x -
+            start.x) *
+        view.zoom;
+
+    const double height =
+        std::abs(
+            end.y -
+            start.y) *
+        view.zoom;
+
+    cairo_rectangle(
+        cr,
+        left,
+        top,
+        width,
+        height);
+
+  } else if (
+      (
+          state->tool ==
+              Tool::Ellipse ||
+          state->tool ==
+              Tool::Circle)) {
+    const double left =
+        widget_x(
+            std::min(
+                start.x,
+                end.x));
+
+    const double top =
+        widget_y(
+            std::min(
+                start.y,
+                end.y));
+
+    const double width =
+        std::abs(
+            end.x -
+            start.x) *
+        view.zoom;
+
+    const double height =
+        std::abs(
+            end.y -
+            start.y) *
+        view.zoom;
+
+    append_ellipse_path(
+        cr,
+        left,
+        top,
+        width,
+        height);
+
+  } else if (
+      state->tool ==
+      Tool::Polygon) {
+    const auto points =
+        polygon_vertices(
+            start,
+            end,
+            state->polygon_sides);
+
+    if (!points.empty()) {
+      cairo_move_to(
+          cr,
+          widget_x(points.front().x),
+          widget_y(points.front().y));
+
+      for (std::size_t i = 1;
+           i < points.size();
+           ++i) {
+        cairo_line_to(
+            cr,
+            widget_x(points[i].x),
+            widget_y(points[i].y));
+      }
+
+      cairo_close_path(cr);
+    }
+  }
+
+  const auto color =
+      state->edit_options.primary;
+
+  const double alpha =
+      color.a / 255.0;
+
+  if (
+      state->edit_options.fill_shapes &&
+      state->tool != Tool::Line) {
+    // Filled shapes preview exactly as a filled shape.
+    // Do not preserve the path and add an artificial outline.
+    cairo_set_source_rgba(
+        cr,
+        color.r / 255.0,
+        color.g / 255.0,
+        color.b / 255.0,
+        alpha);
+
+    cairo_fill(cr);
+
+  } else {
+    // Line and outline-only shapes preview with the
+    // actual foreground colour, opacity and stroke width.
+    cairo_set_source_rgba(
+        cr,
+        color.r / 255.0,
+        color.g / 255.0,
+        color.b / 255.0,
+        alpha);
+
+    cairo_set_line_width(
+        cr,
+        std::max(
+            1.0,
+            state->edit_options.brush_size *
+                view.zoom));
+
+    cairo_stroke(cr);
+  }
+  cairo_restore(cr);
+}
+
+patchy::Rect draw_polygon_shape(
+    CanvasState* state,
+    patchy::LayerId layer,
+    CanvasPoint center,
+    CanvasPoint edge) {
+  const auto points =
+      polygon_vertices(
+          center,
+          edge,
+          state->polygon_sides);
+
+  if (points.size() < 3) {
+    return {};
+  }
+
+  patchy::Rect dirty{};
+
+  const auto add_dirty =
+      [&dirty](patchy::Rect rect) {
+        if (rect.empty()) {
+          return;
+        }
+
+        dirty =
+            dirty.empty()
+                ? rect
+                : patchy::unite_rect(
+                      dirty,
+                      rect);
+      };
+
+  if (state->edit_options.fill_shapes) {
+    double minimum_y =
+        points.front().y;
+
+    double maximum_y =
+        points.front().y;
+
+    for (const auto& point : points) {
+      minimum_y =
+          std::min(
+              minimum_y,
+              point.y);
+
+      maximum_y =
+          std::max(
+              maximum_y,
+              point.y);
+    }
+
+    const int first_y =
+        std::max(
+            0,
+            static_cast<int>(
+                std::floor(
+                    minimum_y)));
+
+    const int last_y =
+        std::min(
+            state->document->height() - 1,
+            static_cast<int>(
+                std::ceil(
+                    maximum_y)));
+
+    for (int y = first_y;
+         y <= last_y;
+         ++y) {
+      const double scan_y =
+          y + 0.5;
+
+      std::vector<double>
+          intersections;
+
+      for (std::size_t i = 0;
+           i < points.size();
+           ++i) {
+        const auto& a =
+            points[i];
+
+        const auto& b =
+            points[
+                (i + 1) %
+                points.size()];
+
+        const bool crosses =
+            (a.y <= scan_y &&
+             b.y > scan_y) ||
+            (b.y <= scan_y &&
+             a.y > scan_y);
+
+        if (!crosses) {
+          continue;
+        }
+
+        const double t =
+            (scan_y - a.y) /
+            (b.y - a.y);
+
+        intersections.push_back(
+            a.x +
+            (b.x - a.x) *
+                t);
+      }
+
+      std::sort(
+          intersections.begin(),
+          intersections.end());
+
+      for (std::size_t i = 0;
+           i + 1 < intersections.size();
+           i += 2) {
+        const int left =
+            static_cast<int>(
+                std::ceil(
+                    intersections[i]));
+
+        const int right =
+            static_cast<int>(
+                std::floor(
+                    intersections[i + 1]));
+
+        if (right < left) {
+          continue;
+        }
+
+        add_dirty(
+            patchy::fill_rect(
+                *state->document,
+                layer,
+                patchy::Rect{
+                    left,
+                    y,
+                    right - left + 1,
+                    1},
+                state->edit_options));
+      }
+    }
+  }
+
+  for (std::size_t i = 0;
+       i < points.size();
+       ++i) {
+    const auto& a =
+        points[i];
+
+    const auto& b =
+        points[
+            (i + 1) %
+            points.size()];
+
+    add_dirty(
+        patchy::draw_line(
+            *state->document,
+            layer,
+            static_cast<int>(
+                std::lround(a.x)),
+            static_cast<int>(
+                std::lround(a.y)),
+            static_cast<int>(
+                std::lround(b.x)),
+            static_cast<int>(
+                std::lround(b.y)),
+            state->edit_options,
+            false));
+  }
+
+  return dirty;
+}
+
 
 void draw_selection_overlay(
     CanvasState* state,
@@ -2499,7 +3691,270 @@ void finish_smoothed_brush(
 
   state->brush_smoothing_active = false;
 
-  refresh_canvas(state);
+  // Every rendered segment already schedules its own dirty-region
+  // refresh. A full-document refresh here defeats that optimization.
+}
+
+
+std::optional<patchy::EditColor>
+eyedropper_hover_color(
+    CanvasState* state) {
+  if (
+      state->tool != Tool::Eyedropper ||
+      !state->hover_valid ||
+      !canvas_cache_ready(state)) {
+    return std::nullopt;
+  }
+
+  double document_x = 0.0;
+  double document_y = 0.0;
+
+  if (!document_position(
+          state,
+          state->hover_x,
+          state->hover_y,
+          &document_x,
+          &document_y)) {
+    return std::nullopt;
+  }
+
+  const int x =
+      std::clamp(
+          static_cast<int>(
+              std::floor(document_x)),
+          0,
+          state->composite_width - 1);
+
+  const int y =
+      std::clamp(
+          static_cast<int>(
+              std::floor(document_y)),
+          0,
+          state->composite_height - 1);
+
+  const auto* pixel =
+      state->composite_rgba.data() +
+      static_cast<std::size_t>(y) *
+          static_cast<std::size_t>(
+              state->composite_stride) +
+      static_cast<std::size_t>(x) * 4U;
+
+  return patchy::EditColor{
+      pixel[0],
+      pixel[1],
+      pixel[2],
+      pixel[3]};
+}
+
+void draw_eyedropper_overlay(
+    CanvasState* state,
+    cairo_t* cr) {
+  const auto sampled =
+      eyedropper_hover_color(
+          state);
+
+  if (!sampled.has_value()) {
+    return;
+  }
+
+  const auto foreground =
+      state->edit_options.primary;
+
+  const double cx =
+      state->hover_x;
+
+  const double cy =
+      state->hover_y;
+
+  constexpr double radius =
+      30.0;
+
+  constexpr double halo_width =
+      8.0;
+
+  constexpr double color_width =
+      5.0;
+
+  constexpr double gap =
+      0.18;
+
+  constexpr double pi =
+      3.14159265358979323846;
+
+  cairo_save(cr);
+
+  cairo_set_line_cap(
+      cr,
+      CAIRO_LINE_CAP_ROUND);
+
+  // Halo oscuro del arco superior.
+  cairo_new_path(cr);
+
+  cairo_arc(
+      cr,
+      cx,
+      cy,
+      radius,
+      pi + gap,
+      2.0 * pi - gap);
+
+  cairo_set_source_rgba(
+      cr,
+      0.0,
+      0.0,
+      0.0,
+      0.88);
+
+  cairo_set_line_width(
+      cr,
+      halo_width);
+
+  cairo_stroke(cr);
+
+  // Color muestreado: arco superior.
+  cairo_new_path(cr);
+
+  cairo_arc(
+      cr,
+      cx,
+      cy,
+      radius,
+      pi + gap,
+      2.0 * pi - gap);
+
+  cairo_set_source_rgb(
+      cr,
+      sampled->r / 255.0,
+      sampled->g / 255.0,
+      sampled->b / 255.0);
+
+  cairo_set_line_width(
+      cr,
+      color_width);
+
+  cairo_stroke(cr);
+
+  // Halo oscuro del arco inferior.
+  cairo_new_path(cr);
+
+  cairo_arc(
+      cr,
+      cx,
+      cy,
+      radius,
+      gap,
+      pi - gap);
+
+  cairo_set_source_rgba(
+      cr,
+      0.0,
+      0.0,
+      0.0,
+      0.0 + 0.88);
+
+  cairo_set_line_width(
+      cr,
+      halo_width);
+
+  cairo_stroke(cr);
+
+  // Color frontal: arco inferior.
+  cairo_new_path(cr);
+
+  cairo_arc(
+      cr,
+      cx,
+      cy,
+      radius,
+      gap,
+      pi - gap);
+
+  cairo_set_source_rgb(
+      cr,
+      foreground.r / 255.0,
+      foreground.g / 255.0,
+      foreground.b / 255.0);
+
+  cairo_set_line_width(
+      cr,
+      color_width);
+
+  cairo_stroke(cr);
+
+  // Eyedropper precision reticle.
+  // Four ticks indicate the exact sample point while
+  // keeping the central pixels visible.
+  cairo_new_path(cr);
+
+  cairo_move_to(
+      cr,
+      cx - 10.0,
+      cy);
+
+  cairo_line_to(
+      cr,
+      cx - 4.0,
+      cy);
+
+  cairo_move_to(
+      cr,
+      cx + 4.0,
+      cy);
+
+  cairo_line_to(
+      cr,
+      cx + 10.0,
+      cy);
+
+  cairo_move_to(
+      cr,
+      cx,
+      cy - 10.0);
+
+  cairo_line_to(
+      cr,
+      cx,
+      cy - 4.0);
+
+  cairo_move_to(
+      cr,
+      cx,
+      cy + 4.0);
+
+  cairo_line_to(
+      cr,
+      cx,
+      cy + 10.0);
+
+  // Halo oscuro para contraste.
+  cairo_set_source_rgba(
+      cr,
+      0.0,
+      0.0,
+      0.0,
+      0.90);
+
+  cairo_set_line_width(
+      cr,
+      3.0);
+
+  cairo_stroke_preserve(cr);
+
+  // Trazo interior claro.
+  cairo_set_source_rgba(
+      cr,
+      1.0,
+      1.0,
+      1.0,
+      0.95);
+
+  cairo_set_line_width(
+      cr,
+      1.1);
+
+  cairo_stroke(cr);
+
+  cairo_restore(cr);
 }
 
 void motion_changed(
@@ -2513,6 +3968,25 @@ void motion_changed(
   state->hover_x = x;
   state->hover_y = y;
   state->hover_valid = true;
+
+  if (
+      state->tool == Tool::Pen &&
+      state->path_controller) {
+    double document_x = 0.0;
+    double document_y = 0.0;
+
+    if (document_position(
+            state,
+            x,
+            y,
+            &document_x,
+            &document_y)) {
+      state->path_controller
+          ->set_hover(
+              document_x,
+              document_y);
+    }
+  }
 
   gtk_widget_queue_draw(
       GTK_WIDGET(state->area));
@@ -2609,10 +4083,106 @@ gboolean key_pressed(
     GtkEventControllerKey*,
     guint keyval,
     guint,
-    GdkModifierType,
+    GdkModifierType modifiers,
     gpointer data) {
   auto* state =
       static_cast<CanvasState*>(data);
+
+  // TEXT_KEYBOARD_SESSION
+  if (
+      state->tool == Tool::Text &&
+      state->text_controller &&
+      state->text_controller->active()) {
+    if (keyval == GDK_KEY_Escape) {
+      state->text_controller
+          ->cancel();
+
+      gtk_widget_queue_draw(
+          GTK_WIDGET(
+              state->area));
+
+      return TRUE;
+    }
+
+    if (
+        (
+            keyval == GDK_KEY_Return ||
+            keyval == GDK_KEY_KP_Enter) &&
+        (modifiers &
+         GDK_CONTROL_MASK) != 0) {
+      state->text_controller
+          ->commit();
+
+      gtk_widget_queue_draw(
+          GTK_WIDGET(
+              state->area));
+
+      return TRUE;
+    }
+  }
+
+  if (
+      state->tool == Tool::Pen &&
+      state->path_controller) {
+    if (
+        keyval == GDK_KEY_Return ||
+        keyval == GDK_KEY_KP_Enter) {
+      const bool committed =
+          state->path_controller
+              ->commit_open_pen();
+
+      gtk_widget_queue_draw(
+          GTK_WIDGET(
+              state->area));
+
+      (void)committed;
+      return TRUE;
+    }
+
+    if (keyval == GDK_KEY_Escape) {
+      state->path_controller
+          ->cancel_pen();
+
+      gtk_widget_queue_draw(
+          GTK_WIDGET(
+              state->area));
+
+      return TRUE;
+    }
+
+    if (
+        keyval == GDK_KEY_BackSpace ||
+        keyval == GDK_KEY_Delete) {
+      state->path_controller
+          ->delete_last_pen_anchor();
+
+      gtk_widget_queue_draw(
+          GTK_WIDGET(
+              state->area));
+
+      return TRUE;
+    }
+  }
+
+  if (
+      state->move_preview.active &&
+      keyval == GDK_KEY_Escape) {
+    cancel_move_preview(state);
+    return TRUE;
+  }
+
+  if (
+      state->zoom_marquee_active &&
+      keyval == GDK_KEY_Escape) {
+    state->zoom_marquee_active =
+        false;
+
+    gtk_widget_queue_draw(
+        GTK_WIDGET(
+            state->area));
+
+    return TRUE;
+  }
 
   if (state->magnetic_lasso_active) {
     if (
@@ -2669,6 +4239,218 @@ gboolean selection_animation_tick(
   return G_SOURCE_CONTINUE;
 }
 
+void draw_zoom_marquee_overlay(
+    CanvasState* state,
+    cairo_t* cr);
+
+
+void set_preview_surface_source(
+    cairo_t* cr,
+    cairo_surface_t* surface,
+    double x,
+    double y,
+    double zoom) {
+  cairo_set_source_surface(
+      cr,
+      surface,
+      x,
+      y);
+
+  cairo_pattern_t* pattern =
+      cairo_get_source(cr);
+
+  cairo_pattern_set_filter(
+      pattern,
+      zoom >= 1.0
+          ? CAIRO_FILTER_NEAREST
+          : CAIRO_FILTER_BILINEAR);
+
+  cairo_pattern_set_extend(
+      pattern,
+      CAIRO_EXTEND_NONE);
+}
+
+void draw_move_preview_outline(
+    CanvasState* state,
+    cairo_t* cr,
+    const ViewGeometry& view) {
+  if (!state->move_preview.active) {
+    return;
+  }
+
+  auto bounds =
+      state->move_preview.original_bounds;
+
+  bounds.x +=
+      state->move_preview.dx;
+
+  bounds.y +=
+      state->move_preview.dy;
+
+  const double scale =
+      std::max(
+          0.0001,
+          view.zoom);
+
+  const double dash[] = {
+      6.0 / scale,
+      4.0 / scale};
+
+  cairo_save(cr);
+
+  cairo_rectangle(
+      cr,
+      bounds.x,
+      bounds.y,
+      bounds.width,
+      bounds.height);
+
+  cairo_set_dash(
+      cr,
+      dash,
+      2,
+      0.0);
+
+  cairo_set_line_width(
+      cr,
+      1.5 / scale);
+
+  cairo_set_source_rgba(
+      cr,
+      1.0,
+      1.0,
+      1.0,
+      0.95);
+
+  cairo_stroke(cr);
+
+  cairo_restore(cr);
+}
+
+void draw_cached_document(
+    CanvasState* state,
+    cairo_t* cr,
+    const ViewGeometry& view) {
+  cairo_save(cr);
+
+  cairo_translate(
+      cr,
+      view.x,
+      view.y);
+
+  cairo_scale(
+      cr,
+      view.zoom,
+      view.zoom);
+
+  cairo_rectangle(
+      cr,
+      0.0,
+      0.0,
+      state->document->width(),
+      state->document->height());
+
+  cairo_clip(cr);
+
+  const auto paint_canvas =
+      [&] {
+        set_preview_surface_source(
+            cr,
+            state->canvas_surface,
+            0.0,
+            0.0,
+            view.zoom);
+
+        cairo_paint(cr);
+      };
+
+  const auto& preview =
+      state->move_preview;
+
+  if (
+      !preview.active ||
+      !preview.fast_surface ||
+      preview.layer_surface == nullptr) {
+    paint_canvas();
+
+    if (preview.active) {
+      draw_move_preview_outline(
+          state,
+          cr,
+          view);
+    }
+
+    cairo_restore(cr);
+    return;
+  }
+
+  const auto hole =
+      preview.base_patch_bounds;
+
+  if (
+      !hole.empty() &&
+      preview.base_patch_surface !=
+          nullptr) {
+    // Paint the normal cached document everywhere except
+    // the layer's original rectangle.
+    cairo_save(cr);
+
+    cairo_new_path(cr);
+
+    cairo_rectangle(
+        cr,
+        0.0,
+        0.0,
+        state->document->width(),
+        state->document->height());
+
+    cairo_rectangle(
+        cr,
+        hole.x,
+        hole.y,
+        hole.width,
+        hole.height);
+
+    cairo_set_fill_rule(
+        cr,
+        CAIRO_FILL_RULE_EVEN_ODD);
+
+    cairo_clip(cr);
+
+    paint_canvas();
+
+    cairo_restore(cr);
+
+    // Fill the vacated rectangle with the one-time composite
+    // rendered with the moving layer hidden.
+    set_preview_surface_source(
+        cr,
+        preview.base_patch_surface,
+        hole.x,
+        hole.y,
+        view.zoom);
+
+    cairo_paint(cr);
+
+  } else {
+    paint_canvas();
+  }
+
+  // The hot path: from here on a mouse move only changes dx/dy.
+  set_preview_surface_source(
+      cr,
+      preview.layer_surface,
+      preview.original_bounds.x +
+          preview.dx,
+      preview.original_bounds.y +
+          preview.dy,
+      view.zoom);
+
+  cairo_paint(cr);
+
+  cairo_restore(cr);
+}
+
 void draw_canvas(
     GtkDrawingArea*,
     cairo_t* cr,
@@ -2691,7 +4473,7 @@ void draw_canvas(
 
   cairo_paint(cr);
 
-  if (state->pixbuf == nullptr) {
+  if (!canvas_cache_ready(state)) {
     return;
   }
 
@@ -2713,40 +4495,18 @@ void draw_canvas(
       document_width,
       document_height);
 
-  cairo_save(cr);
-
-  cairo_translate(
+  draw_cached_document(
+      state,
       cr,
-      view.x,
-      view.y);
+      view);
 
-  cairo_scale(
-      cr,
-      view.zoom,
-      view.zoom);
+  draw_shape_preview(
+      state,
+      cr);
 
-  gdk_cairo_set_source_pixbuf(
-      cr,
-      state->pixbuf,
-      0,
-      0);
-
-  cairo_pattern_t* canvas_pattern =
-      cairo_get_source(cr);
-
-  cairo_pattern_set_filter(
-      canvas_pattern,
-      state->zoom >= 1.0
-          ? CAIRO_FILTER_NEAREST
-          : CAIRO_FILTER_BILINEAR);
-
-  cairo_pattern_set_extend(
-      canvas_pattern,
-      CAIRO_EXTEND_NONE);
-
-  cairo_paint(cr);
-
-  cairo_restore(cr);
+  draw_zoom_marquee_overlay(
+      state,
+      cr);
 
   draw_crop_overlay(
       state,
@@ -2761,6 +4521,55 @@ void draw_canvas(
       cr);
 
   draw_magnetic_lasso_overlay(
+      state,
+      cr);
+
+  if (state->path_controller) {
+    if (state->tool == Tool::Pen) {
+      // Keep already committed work paths visible while
+      // continuing to work with the Pen tool.
+      state->path_controller
+          ->draw_path_selection(
+              cr,
+              view.x,
+              view.y,
+              view.zoom);
+
+      // Draw the currently active, not-yet-committed
+      // pen subpath on top.
+      state->path_controller
+          ->draw_pen(
+              cr,
+              view.x,
+              view.y,
+              view.zoom);
+
+    } else if (
+        state->tool ==
+            Tool::PathSelect) {
+      state->path_controller
+          ->draw_path_selection(
+              cr,
+              view.x,
+              view.y,
+              view.zoom);
+    }
+  }
+
+  if (
+      state->retouch_controller &&
+      (
+          state->tool == Tool::Clone ||
+          state->tool == Tool::Healing)) {
+    state->retouch_controller
+        ->draw_source_marker(
+            cr,
+            view.x,
+            view.y,
+            view.zoom);
+  }
+
+  draw_eyedropper_overlay(
       state,
       cr);
 
@@ -2848,8 +4657,11 @@ void move_active_layer(
     return;
   }
 
-  auto bounds =
+  const auto old_bounds =
       layer->bounds();
+
+  auto bounds =
+      old_bounds;
 
   bounds.x += dx;
   bounds.y += dy;
@@ -2863,7 +4675,272 @@ void move_active_layer(
       state->document->width(),
       state->document->height());
 
-  refresh_canvas(state);
+  refresh_canvas(
+      state,
+      patchy::unite_rect(
+          old_bounds,
+          bounds));
+}
+
+bool is_retouch_tool(
+    Tool tool) {
+  switch (tool) {
+    case Tool::Clone:
+    case Tool::Healing:
+    case Tool::BlurBrush:
+    case Tool::SharpenBrush:
+    case Tool::Dodge:
+    case Tool::Burn:
+    case Tool::Sponge:
+      return true;
+
+    default:
+      return false;
+  }
+}
+
+RetouchMode retouch_mode_for(
+    Tool tool) {
+  switch (tool) {
+    case Tool::Healing:
+      return RetouchMode::Healing;
+
+    case Tool::BlurBrush:
+      return RetouchMode::Blur;
+
+    case Tool::SharpenBrush:
+      return RetouchMode::Sharpen;
+
+    case Tool::Dodge:
+      return RetouchMode::Dodge;
+
+    case Tool::Burn:
+      return RetouchMode::Burn;
+
+    case Tool::Sponge:
+      return RetouchMode::Sponge;
+
+    default:
+      return RetouchMode::Clone;
+  }
+}
+
+void zoom_around(
+    CanvasState* state,
+    double widget_x,
+    double widget_y,
+    double factor);
+
+void zoom_to_widget_rect(
+    CanvasState* state,
+    double x0,
+    double y0,
+    double x1,
+    double y1) {
+  const auto old_view =
+      geometry(state);
+
+  const double left =
+      std::min(x0, x1);
+
+  const double top =
+      std::min(y0, y1);
+
+  const double right =
+      std::max(x0, x1);
+
+  const double bottom =
+      std::max(y0, y1);
+
+  double document_left =
+      (left - old_view.x) /
+      old_view.zoom;
+
+  double document_top =
+      (top - old_view.y) /
+      old_view.zoom;
+
+  double document_right =
+      (right - old_view.x) /
+      old_view.zoom;
+
+  double document_bottom =
+      (bottom - old_view.y) /
+      old_view.zoom;
+
+  document_left =
+      std::clamp(
+          document_left,
+          0.0,
+          static_cast<double>(
+              state->document->width()));
+
+  document_top =
+      std::clamp(
+          document_top,
+          0.0,
+          static_cast<double>(
+              state->document->height()));
+
+  document_right =
+      std::clamp(
+          document_right,
+          0.0,
+          static_cast<double>(
+              state->document->width()));
+
+  document_bottom =
+      std::clamp(
+          document_bottom,
+          0.0,
+          static_cast<double>(
+              state->document->height()));
+
+  const double selection_width =
+      document_right -
+      document_left;
+
+  const double selection_height =
+      document_bottom -
+      document_top;
+
+  if (
+      selection_width < 1.0 ||
+      selection_height < 1.0) {
+    return;
+  }
+
+  const int viewport_width =
+      gtk_widget_get_width(
+          GTK_WIDGET(
+              state->area));
+
+  const int viewport_height =
+      gtk_widget_get_height(
+          GTK_WIDGET(
+              state->area));
+
+  const double new_zoom =
+      std::clamp(
+          std::min(
+              (viewport_width - 48.0) /
+                  selection_width,
+              (viewport_height - 48.0) /
+                  selection_height),
+          0.02,
+          32.0);
+
+  const double center_x =
+      (
+          document_left +
+          document_right) *
+      0.5;
+
+  const double center_y =
+      (
+          document_top +
+          document_bottom) *
+      0.5;
+
+  state->zoom =
+      new_zoom;
+
+  state->pan_x =
+      (
+          state->document->width() *
+              0.5 -
+          center_x) *
+      new_zoom;
+
+  state->pan_y =
+      (
+          state->document->height() *
+              0.5 -
+          center_y) *
+      new_zoom;
+
+  gtk_widget_queue_draw(
+      GTK_WIDGET(
+          state->area));
+}
+
+void draw_zoom_marquee_overlay(
+    CanvasState* state,
+    cairo_t* cr) {
+  if (
+      state->tool != Tool::Zoom ||
+      !state->zoom_marquee_active) {
+    return;
+  }
+
+  const double x =
+      std::min(
+          state->zoom_marquee_start_x,
+          state->zoom_marquee_end_x);
+
+  const double y =
+      std::min(
+          state->zoom_marquee_start_y,
+          state->zoom_marquee_end_y);
+
+  const double width =
+      std::abs(
+          state->zoom_marquee_end_x -
+          state->zoom_marquee_start_x);
+
+  const double height =
+      std::abs(
+          state->zoom_marquee_end_y -
+          state->zoom_marquee_start_y);
+
+  if (
+      width < 1.0 ||
+      height < 1.0) {
+    return;
+  }
+
+  cairo_save(cr);
+
+  cairo_rectangle(
+      cr,
+      x,
+      y,
+      width,
+      height);
+
+  cairo_set_source_rgba(
+      cr,
+      0.25,
+      0.60,
+      1.0,
+      0.12);
+
+  cairo_fill_preserve(cr);
+
+  const double dash[] = {
+      5.0,
+      4.0};
+
+  cairo_set_dash(
+      cr,
+      dash,
+      2,
+      0.0);
+
+  cairo_set_line_width(
+      cr,
+      1.5);
+
+  cairo_set_source_rgba(
+      cr,
+      0.35,
+      0.68,
+      1.0,
+      0.95);
+
+  cairo_stroke(cr);
+
+  cairo_restore(cr);
 }
 
 void drag_begin(
@@ -2873,6 +4950,11 @@ void drag_begin(
     gpointer data) {
   auto* state =
       static_cast<CanvasState*>(data);
+
+  // CANVAS_FORCE_FOCUS
+  gtk_widget_grab_focus(
+      GTK_WIDGET(
+          state->area));
 
   state->drag_start_x = x;
   state->drag_start_y = y;
@@ -2900,6 +4982,29 @@ void drag_begin(
   gtk_widget_grab_focus(
       GTK_WIDGET(state->area));
 
+  if (state->tool == Tool::Zoom) {
+    state->zoom_marquee_active =
+        true;
+
+    state->zoom_marquee_start_x =
+        x;
+
+    state->zoom_marquee_start_y =
+        y;
+
+    state->zoom_marquee_end_x =
+        x;
+
+    state->zoom_marquee_end_y =
+        y;
+
+    gtk_widget_queue_draw(
+        GTK_WIDGET(
+            state->area));
+
+    return;
+  }
+
   const auto modifiers =
       gtk_event_controller_get_current_event_state(
           GTK_EVENT_CONTROLLER(gesture));
@@ -2907,6 +5012,111 @@ void drag_begin(
   state->selection_combine =
       selection_combine_from_modifiers(
           modifiers);
+
+  if (
+      state->tool == Tool::Pen &&
+      state->path_controller) {
+    state->path_controller
+        ->pen_begin(
+            dx,
+            dy,
+            state->zoom);
+
+    gtk_widget_queue_draw(
+        GTK_WIDGET(
+            state->area));
+
+    return;
+  }
+
+  if (
+      state->tool == Tool::PathSelect &&
+      state->path_controller) {
+    state->path_controller
+        ->begin_path_select(
+            dx,
+            dy,
+            state->zoom);
+
+    gtk_widget_queue_draw(
+        GTK_WIDGET(
+            state->area));
+
+    return;
+  }
+
+  if (
+      is_retouch_tool(
+          state->tool) &&
+      state->retouch_controller) {
+    if (
+        (
+            state->tool == Tool::Clone ||
+            state->tool == Tool::Healing) &&
+        (modifiers & GDK_ALT_MASK) != 0) {
+      return;
+    }
+
+    if (
+        (
+            state->tool == Tool::Clone ||
+            state->tool == Tool::Healing) &&
+        !state->retouch_controller
+             ->source_set()) {
+      return;
+    }
+
+    if (
+        !canvas_cache_ready(state) ||
+        !editing_layer(state)
+             .has_value()) {
+      return;
+    }
+
+    push_history(state);
+
+    const RetouchMode mode =
+        retouch_mode_for(
+            state->tool);
+
+    const auto dirty =
+        state->retouch_controller
+            ->begin_stroke(
+                mode,
+                dx,
+                dy,
+                state->composite_rgba,
+                state->composite_width,
+                state->composite_height,
+                state->composite_stride,
+                RetouchBrushSettings{
+                    state->edit_options
+                        .brush_size,
+                    state->edit_options
+                        .brush_softness,
+                    state->brush_opacity},
+                [state](
+                    int px,
+                    int py) {
+                  if (
+                      state->selection
+                          .empty()) {
+                    return 1.0F;
+                  }
+
+                  return
+                      state->selection
+                          .coverage(
+                              px,
+                              py);
+                });
+
+    refresh_canvas(
+        state,
+        dirty);
+
+    return;
+  }
 
   if (
       state->tool == Tool::Marquee ||
@@ -2941,12 +5151,10 @@ void drag_begin(
       state->selection.clear();
     }
 
-    if (state->pixbuf != nullptr) {
+    if (canvas_cache_ready(state)) {
       state->selection.quick_select_rgba(
-          gdk_pixbuf_get_pixels(
-              state->pixbuf),
-          gdk_pixbuf_get_rowstride(
-              state->pixbuf),
+          state->composite_rgba.data(),
+          state->composite_stride,
           static_cast<int>(
               std::lround(dx)),
           static_cast<int>(
@@ -2967,16 +5175,45 @@ void drag_begin(
     }
   }
 
+  if (state->tool == Tool::Move) {
+    begin_move_preview(
+        state,
+        dx,
+        dy);
+  }
+
   if (
       state->tool == Tool::Brush ||
       state->tool == Tool::Eraser ||
       state->tool == Tool::Smudge ||
-      state->tool == Tool::Move ||
       state->tool == Tool::Gradient ||
       state->tool == Tool::Line ||
       state->tool == Tool::Rectangle ||
-      state->tool == Tool::Ellipse) {
+      state->tool == Tool::Ellipse ||
+      state->tool == Tool::Polygon) {
     push_history(state);
+  }
+
+  if (
+      shape_drag_tool(
+          state->tool)) {
+    state->shape_preview_active =
+        true;
+
+    state->shape_preview_start_x =
+        dx;
+
+    state->shape_preview_start_y =
+        dy;
+
+    state->shape_preview_end_x =
+        dx;
+
+    state->shape_preview_end_y =
+        dy;
+
+    gtk_widget_queue_draw(
+        GTK_WIDGET(state->area));
   }
 
   state->pointer_down = true;
@@ -3023,6 +5260,22 @@ void drag_update(
       state->drag_start_y +
       offset_y;
 
+  if (
+      state->tool == Tool::Zoom &&
+      state->zoom_marquee_active) {
+    state->zoom_marquee_end_x =
+        x;
+
+    state->zoom_marquee_end_y =
+        y;
+
+    gtk_widget_queue_draw(
+        GTK_WIDGET(
+            state->area));
+
+    return;
+  }
+
   if (state->tool == Tool::Hand) {
     state->pan_x =
         state->start_pan_x +
@@ -3034,6 +5287,20 @@ void drag_update(
 
     gtk_widget_queue_draw(
         GTK_WIDGET(state->area));
+
+    return;
+  }
+
+  if (
+      state->tool == Tool::Move &&
+      state->move_preview.active) {
+    update_move_preview(
+        state,
+        offset_x,
+        offset_y);
+
+    state->last_x = x;
+    state->last_y = y;
 
     return;
   }
@@ -3069,6 +5336,62 @@ void drag_update(
 
   if (old_inside && new_inside) {
     if (
+      is_retouch_tool(
+          state->tool) &&
+      state->retouch_controller) {
+      const auto dirty =
+          state->retouch_controller
+              ->stroke_to(
+                  new_doc_x,
+                  new_doc_y);
+
+      refresh_canvas(
+          state,
+          dirty);
+
+      state->last_x = x;
+      state->last_y = y;
+
+      return;
+    }
+
+    if (
+        state->tool == Tool::Pen &&
+        state->path_controller) {
+      state->path_controller
+          ->pen_drag(
+              new_doc_x,
+              new_doc_y,
+              state->zoom);
+
+      gtk_widget_queue_draw(
+          GTK_WIDGET(
+              state->area));
+
+      state->last_x = x;
+      state->last_y = y;
+
+      return;
+    }
+
+    if (
+        state->tool == Tool::PathSelect &&
+        state->path_controller) {
+      state->path_controller
+          ->drag_path_select(
+              new_doc_x,
+              new_doc_y);
+
+      gtk_widget_queue_draw(
+          GTK_WIDGET(
+              state->area));
+
+      state->last_x = x;
+      state->last_y = y;
+
+      return;
+    }
+    if (
         state->tool == Tool::Marquee ||
         state->tool ==
             Tool::EllipticalMarquee) {
@@ -3095,12 +5418,10 @@ void drag_update(
     } else if (
         state->tool ==
         Tool::QuickSelect) {
-      if (state->pixbuf != nullptr) {
+      if (canvas_cache_ready(state)) {
         state->selection.quick_select_rgba(
-            gdk_pixbuf_get_pixels(
-                state->pixbuf),
-            gdk_pixbuf_get_rowstride(
-                state->pixbuf),
+            state->composite_rgba.data(),
+            state->composite_stride,
             static_cast<int>(
                 std::lround(new_doc_x)),
             static_cast<int>(
@@ -3128,6 +5449,49 @@ void drag_update(
           new_doc_x,
           new_doc_y,
           state->tool == Tool::Eraser);
+    } else if (
+        shape_drag_tool(
+            state->tool)) {
+      state->shape_preview_end_x =
+          new_doc_x;
+
+      state->shape_preview_end_y =
+          new_doc_y;
+
+      if (state->tool == Tool::Circle) {
+        const double dx =
+            new_doc_x -
+            state->shape_preview_start_x;
+
+        const double dy =
+            new_doc_y -
+            state->shape_preview_start_y;
+
+        const double side =
+            std::max(
+                std::abs(dx),
+                std::abs(dy));
+
+        state->shape_preview_end_x =
+            state->shape_preview_start_x +
+            std::copysign(
+                side,
+                dx == 0.0
+                    ? 1.0
+                    : dx);
+
+        state->shape_preview_end_y =
+            state->shape_preview_start_y +
+            std::copysign(
+                side,
+                dy == 0.0
+                    ? 1.0
+                    : dy);
+      }
+
+      gtk_widget_queue_draw(
+          GTK_WIDGET(state->area));
+
     } else if (state->tool == Tool::Crop) {
       double anchor_x = 0.0;
       double anchor_y = 0.0;
@@ -3173,23 +5537,6 @@ void drag_update(
             state,
             dirty);
       }
-    } else if (state->tool == Tool::Move) {
-      const int dx =
-          static_cast<int>(
-              std::lround(
-                  new_doc_x -
-                  old_doc_x));
-
-      const int dy =
-          static_cast<int>(
-              std::lround(
-                  new_doc_y -
-                  old_doc_y));
-
-      move_active_layer(
-          state,
-          dx,
-          dy);
     }
   }
 
@@ -3207,6 +5554,49 @@ void drag_end(
 
   stop_airbrush_timer(state);
 
+  if (
+      is_retouch_tool(
+          state->tool) &&
+      state->retouch_controller) {
+    state->retouch_controller
+        ->end_stroke();
+
+    notify_document_changed(
+        state);
+
+    gtk_widget_queue_draw(
+        GTK_WIDGET(
+            state->area));
+
+    return;
+  }
+
+  if (
+      state->tool == Tool::Pen &&
+      state->path_controller) {
+    state->path_controller
+        ->pen_end();
+
+    gtk_widget_queue_draw(
+        GTK_WIDGET(
+            state->area));
+
+    return;
+  }
+
+  if (
+      state->tool == Tool::PathSelect &&
+      state->path_controller) {
+    state->path_controller
+        ->end_path_select();
+
+    gtk_widget_queue_draw(
+        GTK_WIDGET(
+            state->area));
+
+    return;
+  }
+
   gtk_widget_grab_focus(
       GTK_WIDGET(state->area));
 
@@ -3217,6 +5607,67 @@ void drag_end(
   const double end_y =
       state->drag_start_y +
       offset_y;
+
+  if (
+      state->tool == Tool::Zoom &&
+      state->zoom_marquee_active) {
+    state->zoom_marquee_active =
+        false;
+
+    const double distance =
+        std::hypot(
+            end_x -
+                state->zoom_marquee_start_x,
+            end_y -
+                state->zoom_marquee_start_y);
+
+    if (distance < 6.0) {
+      zoom_around(
+          state,
+          state->zoom_marquee_start_x,
+          state->zoom_marquee_start_y,
+          1.25);
+
+    } else {
+      zoom_to_widget_rect(
+          state,
+          state->zoom_marquee_start_x,
+          state->zoom_marquee_start_y,
+          end_x,
+          end_y);
+    }
+
+    gtk_widget_queue_draw(
+        GTK_WIDGET(
+            state->area));
+
+    return;
+  }
+
+  if (state->tool == Tool::Move) {
+    if (state->move_preview.active) {
+      const double safe_zoom =
+          std::max(
+              0.0001,
+              state->zoom);
+
+      state->move_preview.dx =
+          static_cast<int>(
+              std::lround(
+                  offset_x /
+                  safe_zoom));
+
+      state->move_preview.dy =
+          static_cast<int>(
+              std::lround(
+                  offset_y /
+                  safe_zoom));
+
+      commit_move_preview(state);
+    }
+
+    return;
+  }
 
   double x0 = 0.0;
   double y0 = 0.0;
@@ -3307,61 +5758,118 @@ void drag_end(
 
   if (state->tool == Tool::Gradient) {
     if (layer.has_value()) {
-      (void)patchy::draw_linear_gradient(
-          *state->document,
-          *layer,
-          static_cast<int>(std::lround(x0)),
-          static_cast<int>(std::lround(y0)),
-          static_cast<int>(std::lround(x1)),
-          static_cast<int>(std::lround(y1)),
-          state->edit_options);
+      const auto dirty =
+          patchy::draw_linear_gradient(
+              *state->document,
+              *layer,
+              static_cast<int>(
+                  std::lround(x0)),
+              static_cast<int>(
+                  std::lround(y0)),
+              static_cast<int>(
+                  std::lround(x1)),
+              static_cast<int>(
+                  std::lround(y1)),
+              state->edit_options);
 
-      refresh_canvas(state);
+      refresh_canvas(
+          state,
+          dirty);
       notify_document_changed(state);
     }
 
     return;
   }
 
+  // Circle uses a square drag box.
+  if (state->tool == Tool::Circle) {
+    const double dx =
+        x1 - x0;
+
+    const double dy =
+        y1 - y0;
+
+    const double side =
+        std::max(
+            std::abs(dx),
+            std::abs(dy));
+
+    x1 =
+        x0 +
+        std::copysign(
+            side,
+            dx == 0.0
+                ? 1.0
+                : dx);
+
+    y1 =
+        y0 +
+        std::copysign(
+            side,
+            dy == 0.0
+                ? 1.0
+                : dy);
+  }
+
   if (
-      state->tool == Tool::Line ||
-      state->tool == Tool::Rectangle ||
-      state->tool == Tool::Ellipse) {
+      shape_drag_tool(
+          state->tool)) {
+    state->shape_preview_active =
+        false;
+
     if (layer.has_value()) {
-      const auto ix0 =
+      patchy::Rect dirty{};
+
+      const int ix0 =
           static_cast<int>(
               std::lround(x0));
 
-      const auto iy0 =
+      const int iy0 =
           static_cast<int>(
               std::lround(y0));
 
-      const auto ix1 =
+      const int ix1 =
           static_cast<int>(
               std::lround(x1));
 
-      const auto iy1 =
+      const int iy1 =
           static_cast<int>(
               std::lround(y1));
 
       if (state->tool == Tool::Line) {
-        (void)patchy::draw_line(
-            *state->document,
-            *layer,
-            ix0,
-            iy0,
-            ix1,
-            iy1,
-            state->edit_options,
-            false);
+        dirty =
+            patchy::draw_line(
+                *state->document,
+                *layer,
+                ix0,
+                iy0,
+                ix1,
+                iy1,
+                state->edit_options,
+                false);
+
+      } else if (
+          state->tool ==
+          Tool::Polygon) {
+        dirty =
+            draw_polygon_shape(
+                state,
+                *layer,
+                CanvasPoint{x0, y0},
+                CanvasPoint{x1, y1});
+
       } else {
         patchy::Rect rect{
             static_cast<std::int32_t>(
                 std::floor(
-                    std::min(x0, x1))),
+                    std::min(
+                        x0,
+                        x1))),
             static_cast<std::int32_t>(
                 std::floor(
-                    std::min(y0, y1))),
+                    std::min(
+                        y0,
+                        y1))),
             std::max(
                 1,
                 static_cast<int>(
@@ -3376,27 +5884,42 @@ void drag_end(
                             y1 - y0))))};
 
         if (
-            state->tool ==
-            Tool::Ellipse) {
-          (void)patchy::draw_ellipse(
-              *state->document,
-              *layer,
-              rect,
-              state->edit_options,
-              false);
+            (
+                state->tool ==
+                    Tool::Ellipse ||
+                state->tool ==
+                    Tool::Circle)) {
+          dirty =
+              patchy::draw_ellipse(
+                  *state->document,
+                  *layer,
+                  rect,
+                  state->edit_options,
+                  false);
+
         } else {
-          (void)patchy::draw_rectangle(
-              *state->document,
-              *layer,
-              rect,
-              state->edit_options,
-              false);
+          dirty =
+              patchy::draw_rectangle(
+                  *state->document,
+                  *layer,
+                  rect,
+                  state->edit_options,
+                  false);
         }
       }
 
-      refresh_canvas(state);
-      notify_document_changed(state);
+      if (!dirty.empty()) {
+        refresh_canvas(
+            state,
+            dirty);
+
+        notify_document_changed(
+            state);
+      }
     }
+
+    gtk_widget_queue_draw(
+        GTK_WIDGET(state->area));
 
     return;
   }
@@ -3483,6 +6006,61 @@ void click_pressed(
   auto* state =
       static_cast<CanvasState*>(data);
 
+  // CANVAS_FORCE_FOCUS
+  gtk_widget_grab_focus(
+      GTK_WIDGET(
+          state->area));
+
+  // CANVAS_CLICK_FOCUS
+  gtk_widget_grab_focus(
+      GTK_WIDGET(
+          state->area));
+
+  if (
+      state->retouch_controller &&
+      (
+          state->tool == Tool::Clone ||
+          state->tool == Tool::Healing)) {
+    const auto modifiers =
+        gtk_event_controller_get_current_event_state(
+            GTK_EVENT_CONTROLLER(
+                gesture));
+
+    const guint button =
+        gtk_gesture_single_get_current_button(
+            GTK_GESTURE_SINGLE(
+                gesture));
+
+    if (
+        button == GDK_BUTTON_PRIMARY &&
+        (modifiers & GDK_ALT_MASK) != 0) {
+      double document_x = 0.0;
+      double document_y = 0.0;
+
+      if (document_position(
+              state,
+              x,
+              y,
+              &document_x,
+              &document_y)) {
+        state->retouch_controller
+            ->set_source(
+                static_cast<int>(
+                    std::lround(
+                        document_x)),
+                static_cast<int>(
+                    std::lround(
+                        document_y)));
+
+        gtk_widget_queue_draw(
+            GTK_WIDGET(
+                state->area));
+      }
+
+      return;
+    }
+  }
+
   if (state->tool == Tool::Text) {
     double document_x = 0.0;
     double document_y = 0.0;
@@ -3565,15 +6143,18 @@ void click_pressed(
   if (state->tool == Tool::Zoom) {
     const guint button =
         gtk_gesture_single_get_current_button(
-            GTK_GESTURE_SINGLE(gesture));
+            GTK_GESTURE_SINGLE(
+                gesture));
 
-    zoom_around(
-        state,
-        x,
-        y,
-        button == GDK_BUTTON_SECONDARY
-            ? 0.8
-            : 1.25);
+    if (
+        button ==
+        GDK_BUTTON_SECONDARY) {
+      zoom_around(
+          state,
+          x,
+          y,
+          0.8);
+    }
 
     return;
   }
@@ -3583,7 +6164,7 @@ void click_pressed(
     double document_y = 0.0;
 
     if (
-        state->pixbuf == nullptr ||
+        !canvas_cache_ready(state) ||
         !document_position(
             state,
             x,
@@ -3599,10 +6180,8 @@ void click_pressed(
                 gesture));
 
     state->selection.magic_wand_rgba(
-        gdk_pixbuf_get_pixels(
-            state->pixbuf),
-        gdk_pixbuf_get_rowstride(
-            state->pixbuf),
+        state->composite_rgba.data(),
+        state->composite_stride,
         static_cast<int>(
             std::lround(document_x)),
         static_cast<int>(
@@ -3643,16 +6222,19 @@ void click_pressed(
 
     push_history(state);
 
-    (void)patchy::flood_fill(
-        *state->document,
-        *layer,
-        static_cast<int>(
-            std::lround(document_x)),
-        static_cast<int>(
-            std::lround(document_y)),
-        state->edit_options);
+    const auto dirty =
+        patchy::flood_fill(
+            *state->document,
+            *layer,
+            static_cast<int>(
+                std::lround(document_x)),
+            static_cast<int>(
+                std::lround(document_y)),
+            state->edit_options);
 
-    refresh_canvas(state);
+    refresh_canvas(
+        state,
+        dirty);
     notify_document_changed(state);
 
     return;
@@ -3662,7 +6244,9 @@ void click_pressed(
     double document_x = 0.0;
     double document_y = 0.0;
 
-    if (!document_position(
+    if (
+        !canvas_cache_ready(state) ||
+        !document_position(
             state,
             x,
             y,
@@ -3671,33 +6255,40 @@ void click_pressed(
       return;
     }
 
-    auto image =
-        patchy::Compositor{}.flatten_rgb8(
-            *state->document);
-
     const int px =
         std::clamp(
             static_cast<int>(
-                document_x),
+                std::floor(document_x)),
             0,
-            image.width() - 1);
+            state->composite_width - 1);
 
     const int py =
         std::clamp(
             static_cast<int>(
-                document_y),
+                std::floor(document_y)),
             0,
-            image.height() - 1);
+            state->composite_height - 1);
 
     const auto* sample =
-        image.pixel(px, py);
+        state->composite_rgba.data() +
+        static_cast<std::size_t>(py) *
+            static_cast<std::size_t>(
+                state->composite_stride) +
+        static_cast<std::size_t>(px) *
+            4U;
 
     state->edit_options.primary =
         patchy::EditColor{
             sample[0],
             sample[1],
             sample[2],
-            255};
+            sample[3]};
+
+    gtk_widget_queue_draw(
+        GTK_WIDGET(
+            state->area));
+
+    return;
   }
 }
 
@@ -3711,34 +6302,70 @@ gboolean scroll_canvas(
 
   const GdkModifierType modifiers =
       gtk_event_controller_get_current_event_state(
-          GTK_EVENT_CONTROLLER(controller));
+          GTK_EVENT_CONTROLLER(
+              controller));
 
   const bool zoom =
       state->tool == Tool::Zoom ||
       (modifiers & GDK_CONTROL_MASK) != 0;
 
   if (zoom) {
-    double x = 0.0;
-    double y = 0.0;
+    double x =
+        gtk_widget_get_width(
+            GTK_WIDGET(
+                state->area)) *
+        0.5;
+
+    double y =
+        gtk_widget_get_height(
+            GTK_WIDGET(
+                state->area)) *
+        0.5;
 
     GdkEvent* event =
         gtk_event_controller_get_current_event(
-            GTK_EVENT_CONTROLLER(controller));
+            GTK_EVENT_CONTROLLER(
+                controller));
+
+    if (event != nullptr) {
+      double event_x = 0.0;
+      double event_y = 0.0;
+
+      if (gdk_event_get_position(
+              event,
+              &event_x,
+              &event_y)) {
+        x = event_x;
+        y = event_y;
+      }
+    }
+
+    double delta = dy;
 
     if (
-        event != nullptr &&
-        gdk_event_get_position(
-            event,
-            &x,
-            &y)) {
-      zoom_around(
-          state,
-          x,
-          y,
-          dy < 0.0
-              ? 1.15
-              : 1.0 / 1.15);
+        std::abs(delta) <
+        std::abs(dx)) {
+      delta = dx;
     }
+
+    if (
+        std::abs(delta) <
+        0.00001) {
+      return TRUE;
+    }
+
+    const double factor =
+        std::exp(
+            -delta * 0.18);
+
+    zoom_around(
+        state,
+        x,
+        y,
+        std::clamp(
+            factor,
+            0.70,
+            1.43));
 
     return TRUE;
   }
@@ -3750,7 +6377,8 @@ gboolean scroll_canvas(
       dy * 36.0;
 
   gtk_widget_queue_draw(
-      GTK_WIDGET(state->area));
+      GTK_WIDGET(
+          state->area));
 
   return TRUE;
 }
@@ -3786,8 +6414,16 @@ CanvasView create_canvas_view(
       area,
       TRUE);
 
-  gtk_widget_set_can_focus(
+  gtk_widget_set_focusable(
       area,
+      TRUE);
+
+  gtk_widget_set_focus_on_click(
+      area,
+      TRUE);
+
+  gtk_widget_set_focusable(
+      overlay,
       TRUE);
 
   auto* state =
@@ -3839,7 +6475,7 @@ CanvasView create_canvas_view(
       state,
       0);
 
-  rebuild_pixbuf(state);
+  rebuild_canvas_cache(state);
 
   state->text_controller =
       std::make_unique<TextController>(
@@ -3853,6 +6489,24 @@ CanvasView create_canvas_view(
             notify_document_changed(state);
           });
 
+
+  state->retouch_controller =
+      std::make_unique<RetouchController>(
+          document);
+
+  state->path_controller =
+      std::make_unique<PathController>(
+          document,
+          [state] {
+            push_history(state);
+          },
+          [state] {
+            notify_document_changed(state);
+
+            gtk_widget_queue_draw(
+                GTK_WIDGET(
+                    state->area));
+          });
 
   g_object_set_data_full(
       G_OBJECT(area),
@@ -3921,7 +6575,7 @@ CanvasView create_canvas_view(
       state);
 
   gtk_widget_add_controller(
-      area,
+      overlay,
       keys);
 
   GtkGesture* drag =
@@ -3975,6 +6629,16 @@ CanvasView create_canvas_view(
           static_cast<GtkEventControllerScrollFlags>(
               GTK_EVENT_CONTROLLER_SCROLL_BOTH_AXES));
 
+  gtk_event_controller_set_propagation_phase(
+      GTK_EVENT_CONTROLLER(
+          scroll),
+      GTK_PHASE_CAPTURE);
+
+  gtk_event_controller_set_propagation_phase(
+      GTK_EVENT_CONTROLLER(
+          scroll),
+      GTK_PHASE_CAPTURE);
+
   g_signal_connect(
       scroll,
       "scroll",
@@ -3982,7 +6646,7 @@ CanvasView create_canvas_view(
       state);
 
   gtk_widget_add_controller(
-      area,
+      overlay,
       scroll);
 
   set_tool_cursor(state);
@@ -4006,6 +6670,41 @@ CanvasView create_canvas_view(
               state);
         }
 
+        state->shape_preview_active =
+            false;
+
+        if (
+            state->path_controller &&
+            state->tool == Tool::Pen &&
+            tool != Tool::Pen) {
+          state->path_controller
+              ->cancel_pen();
+        }
+
+        if (
+            state->path_controller &&
+            state->tool ==
+                Tool::PathSelect &&
+            tool !=
+                Tool::PathSelect) {
+          state->path_controller
+              ->end_path_select();
+        }
+
+        if (
+            state->retouch_controller &&
+            state->tool != tool) {
+          state->retouch_controller
+              ->end_stroke();
+        }
+
+        if (
+            state->move_preview.active &&
+            state->tool == Tool::Move &&
+            tool != Tool::Move) {
+          cancel_move_preview(state);
+        }
+
         state->tool = tool;
 
         if (tool != Tool::Crop) {
@@ -4013,6 +6712,11 @@ CanvasView create_canvas_view(
         }
 
         set_tool_cursor(state);
+
+        // CANVAS_TOOL_FOCUS
+        gtk_widget_grab_focus(
+            GTK_WIDGET(
+                state->area));
 
         gtk_widget_queue_draw(
             GTK_WIDGET(state->area));
@@ -4100,6 +6804,28 @@ CanvasView create_canvas_view(
             shape;
       };
 
+  result.set_fill_shapes =
+      [state](bool enabled) {
+        state->edit_options.fill_shapes =
+            enabled;
+
+        gtk_widget_queue_draw(
+            GTK_WIDGET(
+                state->area));
+      };
+
+  result.set_polygon_sides =
+      [state](int sides) {
+        state->polygon_sides =
+            std::clamp(
+                sides,
+                3,
+                32);
+
+        gtk_widget_queue_draw(
+            GTK_WIDGET(state->area));
+      };
+
   result.commit_crop =
       [state] {
         (void)commit_crop(state);
@@ -4108,6 +6834,101 @@ CanvasView create_canvas_view(
   result.cancel_crop =
       [state] {
         cancel_crop(state);
+      };
+
+  result.commit_pen =
+      [state] {
+        if (!state->path_controller) {
+          return false;
+        }
+
+        const bool committed =
+            state->path_controller
+                ->commit_open_pen();
+
+        gtk_widget_queue_draw(
+            GTK_WIDGET(
+                state->area));
+
+        return committed;
+      };
+
+  result.cancel_pen =
+      [state] {
+        if (state->path_controller) {
+          state->path_controller
+              ->cancel_pen();
+        }
+
+        gtk_widget_queue_draw(
+            GTK_WIDGET(
+                state->area));
+      };
+
+  result.zoom_in =
+      [state] {
+        const double x =
+            gtk_widget_get_width(
+                GTK_WIDGET(
+                    state->area)) *
+            0.5;
+
+        const double y =
+            gtk_widget_get_height(
+                GTK_WIDGET(
+                    state->area)) *
+            0.5;
+
+        zoom_around(
+            state,
+            x,
+            y,
+            1.25);
+      };
+
+  result.zoom_out =
+      [state] {
+        const double x =
+            gtk_widget_get_width(
+                GTK_WIDGET(
+                    state->area)) *
+            0.5;
+
+        const double y =
+            gtk_widget_get_height(
+                GTK_WIDGET(
+                    state->area)) *
+            0.5;
+
+        zoom_around(
+            state,
+            x,
+            y,
+            0.8);
+      };
+
+  result.zoom_100 =
+      [state] {
+        state->zoom = 1.0;
+        state->pan_x = 0.0;
+        state->pan_y = 0.0;
+        state->view_initialized = true;
+
+        gtk_widget_queue_draw(
+            GTK_WIDGET(
+                state->area));
+      };
+
+  result.zoom_fit =
+      [state] {
+        state->zoom = 1.0;
+        state->pan_x = 0.0;
+        state->pan_y = 0.0;
+        state->view_initialized = false;
+
+        gtk_widget_queue_draw(
+            GTK_WIDGET(
+                state->area));
       };
 
   result.set_document_changed_callback =

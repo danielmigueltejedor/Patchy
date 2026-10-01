@@ -102,7 +102,7 @@ std::vector<FlyoutEntry> tool_flyout_entries(
     case Tool::Clone:
     case Tool::PatternStamp:
       return {
-          {Tool::Clone, "Tampón de clonar", "tool-clone", false},
+          {Tool::Clone, "Tampón de clonar", "tool-clone", true},
           {Tool::PatternStamp, "Tampón de motivo", "tool-pattern-stamp", false},
       };
 
@@ -110,7 +110,7 @@ std::vector<FlyoutEntry> tool_flyout_entries(
     case Tool::SpotHealing:
     case Tool::PatchTool:
       return {
-          {Tool::Healing, "Pincel corrector", "tool-healing", false},
+          {Tool::Healing, "Pincel corrector", "tool-healing", true},
           {Tool::SpotHealing, "Pincel corrector puntual", "tool-spot-healing", false},
           {Tool::PatchTool, "Parche", "tool-patch", false},
       };
@@ -121,17 +121,17 @@ std::vector<FlyoutEntry> tool_flyout_entries(
       return {
           {Tool::Smudge, "Dedo", "tool-smudge", true},
           {Tool::MixerBrush, "Pincel mezclador", "tool-mixer-brush", false},
-          {Tool::BlurBrush, "Desenfocar", "tool-blur", false},
-          {Tool::SharpenBrush, "Enfocar", "tool-sharpen", false},
+          {Tool::BlurBrush, "Desenfocar", "tool-blur", true},
+          {Tool::SharpenBrush, "Enfocar", "tool-sharpen", true},
       };
 
     case Tool::Dodge:
     case Tool::Burn:
     case Tool::Sponge:
       return {
-          {Tool::Dodge, "Sobreexponer", "tool-dodge", false},
-          {Tool::Burn, "Subexponer", "tool-burn", false},
-          {Tool::Sponge, "Esponja", "tool-sponge", false},
+          {Tool::Dodge, "Sobreexponer", "tool-dodge", true},
+          {Tool::Burn, "Subexponer", "tool-burn", true},
+          {Tool::Sponge, "Esponja", "tool-sponge", true},
       };
 
     case Tool::Pen:
@@ -139,7 +139,7 @@ std::vector<FlyoutEntry> tool_flyout_entries(
     case Tool::DeleteAnchor:
     case Tool::ConvertPoint:
       return {
-          {Tool::Pen, "Pluma", "tool-pen", false},
+          {Tool::Pen, "Pluma", "tool-pen", true},
           {Tool::AddAnchor, "Añadir punto de ancla", "tool-add-anchor", false},
           {Tool::DeleteAnchor, "Eliminar punto de ancla", "tool-delete-anchor", false},
           {Tool::ConvertPoint, "Convertir punto", "tool-convert-point", false},
@@ -148,20 +148,22 @@ std::vector<FlyoutEntry> tool_flyout_entries(
     case Tool::PathSelect:
     case Tool::DirectSelect:
       return {
-          {Tool::PathSelect, "Selección de trazado", "tool-path-select", false},
+          {Tool::PathSelect, "Selección de trazado", "tool-path-select", true},
           {Tool::DirectSelect, "Selección directa", "tool-direct-select", false},
       };
 
     case Tool::Line:
     case Tool::Rectangle:
     case Tool::Ellipse:
+    case Tool::Circle:
     case Tool::Polygon:
     case Tool::CustomShape:
       return {
           {Tool::Line, "Línea", "tool-line", true},
           {Tool::Rectangle, "Rectángulo", "tool-rect", true},
           {Tool::Ellipse, "Elipse", "tool-ellipse", true},
-          {Tool::Polygon, "Polígono", "tool-polygon", false},
+          {Tool::Circle, "Círculo", "tool-ellipse", true},
+          {Tool::Polygon, "Polígono", "tool-polygon", true},
           {Tool::CustomShape, "Forma personalizada", "tool-custom-shape", false},
       };
 
@@ -424,7 +426,7 @@ GtkWidget* tool_icon(
 
   gtk_image_set_pixel_size(
       GTK_IMAGE(image),
-      20);
+      18);
 
   return image;
 }
@@ -622,11 +624,11 @@ GtkWidget* create_tool_palette(
 
   gtk_widget_set_margin_start(
       palette,
-      4);
+      2);
 
   gtk_widget_set_margin_end(
       palette,
-      4);
+      2);
 
   static bool compact_palette_css_installed = false;
 
@@ -637,22 +639,33 @@ GtkWidget* create_tool_palette(
     gtk_css_provider_load_from_string(
         provider,
         ".lienzo-color-swatch {"
-        "  min-width: 22px;"
-        "  min-height: 22px;"
+        "  min-width: 16px;"
+        "  min-height: 16px;"
         "  padding: 0;"
         "  margin: 0;"
+        "  border: none;"
+        "  box-shadow: none;"
+        "  background: transparent;"
+        "  background-image: none;"
+        "  border-radius: 4px;"
         "}"
         ".lienzo-color-swatch > button {"
-        "  min-width: 22px;"
-        "  min-height: 22px;"
+        "  min-width: 16px;"
+        "  min-height: 16px;"
         "  padding: 0;"
         "  margin: 0;"
+        "  border: none;"
+        "  box-shadow: none;"
+        "  background: transparent;"
+        "  background-image: none;"
+        "  border-radius: 4px;"
         "}"
         ".lienzo-color-mini {"
         "  min-width: 18px;"
         "  min-height: 18px;"
         "  padding: 0;"
         "  margin: 0;"
+        "  border-radius: 5px;"
         "  font-size: 9px;"
         "}");
 
@@ -732,7 +745,12 @@ GtkWidget* create_tool_palette(
         definition.tool == Tool::Text ||
         definition.tool == Tool::Eyedropper ||
         definition.tool == Tool::Hand ||
-        definition.tool == Tool::Zoom;
+        definition.tool == Tool::Zoom ||
+        definition.tool == Tool::Clone ||
+        definition.tool == Tool::Healing ||
+        definition.tool == Tool::Dodge ||
+        definition.tool == Tool::Pen ||
+        definition.tool == Tool::PathSelect;
 
     gtk_widget_set_sensitive(
         button,
@@ -744,8 +762,8 @@ GtkWidget* create_tool_palette(
 
     gtk_widget_set_size_request(
         button,
-        38,
-        38);
+        34,
+        34);
 
     g_object_set_data(
         G_OBJECT(button),
@@ -830,15 +848,23 @@ GtkWidget* create_tool_palette(
             PaletteColorState*>(data);
       });
 
-  // Swatches superpuestos, como los controles
-  // frontal/fondo clásicos de un editor gráfico.
+  // Colores frontal/fondo: dos swatches superpuestos pero
+  // desplazados para que ambos sean siempre visibles.
   GtkWidget* swatches =
-      gtk_overlay_new();
+      gtk_fixed_new();
 
   gtk_widget_set_size_request(
       swatches,
       34,
-      34);
+      32);
+
+  gtk_widget_set_halign(
+      swatches,
+      GTK_ALIGN_CENTER);
+
+  gtk_widget_set_margin_top(
+      swatches,
+      5);
 
   GtkWidget* background =
       gtk_color_button_new();
@@ -848,28 +874,30 @@ GtkWidget* create_tool_palette(
 
   gtk_widget_set_size_request(
       background,
-      22,
-      22);
+      16,
+      16);
 
   gtk_widget_add_css_class(
       background,
       "lienzo-color-swatch");
 
-  gtk_widget_set_halign(
+  gtk_widget_add_css_class(
       background,
-      GTK_ALIGN_END);
+      "flat");
 
-  gtk_widget_set_valign(
+  gtk_widget_add_css_class(
       background,
-      GTK_ALIGN_END);
+      "lienzo-color-flat");
 
   gtk_widget_set_tooltip_text(
       background,
       "Color de fondo");
 
-  gtk_overlay_set_child(
-      GTK_OVERLAY(swatches),
-      background);
+  gtk_fixed_put(
+      GTK_FIXED(swatches),
+      background,
+      12.0,
+      10.0);
 
   GtkWidget* foreground =
       gtk_color_button_new();
@@ -879,36 +907,30 @@ GtkWidget* create_tool_palette(
 
   gtk_widget_set_size_request(
       foreground,
-      22,
-      22);
+      16,
+      16);
 
   gtk_widget_add_css_class(
       foreground,
       "lienzo-color-swatch");
 
-  gtk_widget_set_halign(
+  gtk_widget_add_css_class(
       foreground,
-      GTK_ALIGN_START);
+      "flat");
 
-  gtk_widget_set_valign(
+  gtk_widget_add_css_class(
       foreground,
-      GTK_ALIGN_START);
+      "lienzo-color-flat");
 
   gtk_widget_set_tooltip_text(
       foreground,
       "Color frontal");
 
-  gtk_overlay_add_overlay(
-      GTK_OVERLAY(swatches),
-      foreground);
-
-  gtk_widget_set_halign(
-      swatches,
-      GTK_ALIGN_CENTER);
-
-  gtk_widget_set_margin_top(
-      swatches,
-      6);
+  gtk_fixed_put(
+      GTK_FIXED(swatches),
+      foreground,
+      0.0,
+      0.0);
 
   gtk_box_append(
       GTK_BOX(palette),
@@ -934,15 +956,26 @@ GtkWidget* create_tool_palette(
   GtkWidget* color_actions =
       gtk_box_new(
           GTK_ORIENTATION_HORIZONTAL,
-          0);
+          2);
 
   gtk_widget_set_halign(
       color_actions,
       GTK_ALIGN_CENTER);
 
   GtkWidget* defaults =
-      gtk_button_new_with_label(
-          "D");
+      gtk_button_new();
+
+  GtkWidget* defaults_icon =
+      tool_icon(
+          "default-colors");
+
+  gtk_image_set_pixel_size(
+      GTK_IMAGE(defaults_icon),
+      15);
+
+  gtk_button_set_child(
+      GTK_BUTTON(defaults),
+      defaults_icon);
 
   gtk_widget_add_css_class(
       defaults,
@@ -962,8 +995,19 @@ GtkWidget* create_tool_palette(
       18);
 
   GtkWidget* swap =
-      gtk_button_new_with_label(
-          "X");
+      gtk_button_new();
+
+  GtkWidget* swap_icon =
+      tool_icon(
+          "swap-colors");
+
+  gtk_image_set_pixel_size(
+      GTK_IMAGE(swap_icon),
+      15);
+
+  gtk_button_set_child(
+      GTK_BUTTON(swap),
+      swap_icon);
 
   gtk_widget_add_css_class(
       swap,
@@ -1013,8 +1057,19 @@ GtkWidget* create_tool_palette(
       2);
 
   GtkWidget* quick_mask =
-      gtk_toggle_button_new_with_label(
-          "Q");
+      gtk_toggle_button_new();
+
+  GtkWidget* quick_mask_icon =
+      tool_icon(
+          "mask");
+
+  gtk_image_set_pixel_size(
+      GTK_IMAGE(quick_mask_icon),
+      16);
+
+  gtk_button_set_child(
+      GTK_BUTTON(quick_mask),
+      quick_mask_icon);
 
   gtk_widget_add_css_class(
       quick_mask,
@@ -1026,8 +1081,8 @@ GtkWidget* create_tool_palette(
 
   gtk_widget_set_size_request(
       quick_mask,
-      26,
-      22);
+      18,
+      18);
 
   gtk_widget_set_halign(
       quick_mask,

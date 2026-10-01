@@ -18,6 +18,9 @@ struct State {
   GtkWidget* paint_options{};
   GtkWidget* crop_options{};
   GtkWidget* text_options{};
+  GtkWidget* polygon_options{};
+  GtkWidget* pen_options{};
+  GtkWidget* zoom_options{};
 
   GtkDropDown* text_family{};
   GtkSpinButton* text_size{};
@@ -30,9 +33,12 @@ struct State {
   GtkSpinButton* softness{};
   GtkSpinButton* flow{};
   GtkSpinButton* smoothing{};
+  GtkSpinButton* polygon_sides{};
 
   GtkCheckButton* airbrush{};
+  GtkCheckButton* shape_fill{};
   GtkDropDown* tip{};
+  GtkWidget* tip_options{};
 };
 
 GtkWidget* label(
@@ -108,6 +114,150 @@ void reset_clicked(
   }
 }
 
+void size_text_changed(
+    GtkEditable* editable,
+    gpointer data) {
+  auto* state =
+      static_cast<State*>(data);
+
+  if (!state->canvas.set_brush_size) {
+    return;
+  }
+
+  const char* text =
+      gtk_editable_get_text(
+          editable);
+
+  if (
+      text == nullptr ||
+      *text == 0) {
+    return;
+  }
+
+  char* end = nullptr;
+
+  const gint64 value =
+      g_ascii_strtoll(
+          text,
+          &end,
+          10);
+
+  if (
+      end == text ||
+      *end != 0) {
+    return;
+  }
+
+  state->canvas.set_brush_size(
+      std::clamp(
+          static_cast<int>(value),
+          1,
+          5000));
+}
+
+int editable_integer(
+    GtkEditable* editable,
+    int minimum,
+    int maximum,
+    int fallback) {
+  const char* text =
+      gtk_editable_get_text(
+          editable);
+
+  if (
+      text == nullptr ||
+      *text == 0) {
+    return fallback;
+  }
+
+  char* end = nullptr;
+
+  const gint64 value =
+      g_ascii_strtoll(
+          text,
+          &end,
+          10);
+
+  if (
+      end == text ||
+      *end != 0) {
+    return fallback;
+  }
+
+  return std::clamp(
+      static_cast<int>(value),
+      minimum,
+      maximum);
+}
+
+void opacity_text_changed(
+    GtkEditable* editable,
+    gpointer data) {
+  auto* state =
+      static_cast<State*>(data);
+
+  if (state->canvas.set_brush_opacity) {
+    state->canvas.set_brush_opacity(
+        editable_integer(
+            editable,
+            1,
+            100,
+            gtk_spin_button_get_value_as_int(
+                state->opacity)));
+  }
+}
+
+void softness_text_changed(
+    GtkEditable* editable,
+    gpointer data) {
+  auto* state =
+      static_cast<State*>(data);
+
+  if (state->canvas.set_brush_softness) {
+    state->canvas.set_brush_softness(
+        editable_integer(
+            editable,
+            0,
+            100,
+            gtk_spin_button_get_value_as_int(
+                state->softness)));
+  }
+}
+
+void flow_text_changed(
+    GtkEditable* editable,
+    gpointer data) {
+  auto* state =
+      static_cast<State*>(data);
+
+  if (state->canvas.set_brush_flow) {
+    state->canvas.set_brush_flow(
+        editable_integer(
+            editable,
+            1,
+            100,
+            gtk_spin_button_get_value_as_int(
+                state->flow)));
+  }
+}
+
+void smoothing_text_changed(
+    GtkEditable* editable,
+    gpointer data) {
+  auto* state =
+      static_cast<State*>(data);
+
+  if (state->canvas.set_smoothing) {
+    state->canvas.set_smoothing(
+        editable_integer(
+            editable,
+            0,
+            100,
+            gtk_spin_button_get_value_as_int(
+                state->smoothing)));
+  }
+}
+
 void size_changed(
     GtkSpinButton* spin,
     gpointer data) {
@@ -168,6 +318,19 @@ void smoothing_changed(
   }
 }
 
+void shape_fill_changed(
+    GtkCheckButton* button,
+    gpointer data) {
+  auto* state =
+      static_cast<State*>(data);
+
+  if (state->canvas.set_fill_shapes) {
+    state->canvas.set_fill_shapes(
+        gtk_check_button_get_active(
+            button));
+  }
+}
+
 void airbrush_changed(
     GtkCheckButton* button,
     gpointer data) {
@@ -194,6 +357,19 @@ void tip_changed(
   if (state->canvas.set_brush_tip_index) {
     state->canvas.set_brush_tip_index(
         static_cast<int>(selected));
+  }
+}
+
+void polygon_sides_changed(
+    GtkSpinButton* spin,
+    gpointer data) {
+  auto* state =
+      static_cast<State*>(data);
+
+  if (state->canvas.set_polygon_sides) {
+    state->canvas.set_polygon_sides(
+        gtk_spin_button_get_value_as_int(
+            spin));
   }
 }
 
@@ -315,6 +491,72 @@ void text_cancel_clicked(
 
   if (state->canvas.cancel_text) {
     state->canvas.cancel_text();
+  }
+}
+
+void pen_apply_clicked(
+    GtkButton*,
+    gpointer data) {
+  auto* state =
+      static_cast<State*>(data);
+
+  if (state->canvas.commit_pen) {
+    (void)state->canvas.commit_pen();
+  }
+}
+
+void pen_cancel_clicked(
+    GtkButton*,
+    gpointer data) {
+  auto* state =
+      static_cast<State*>(data);
+
+  if (state->canvas.cancel_pen) {
+    state->canvas.cancel_pen();
+  }
+}
+
+void zoom_in_clicked(
+    GtkButton*,
+    gpointer data) {
+  auto* state =
+      static_cast<State*>(data);
+
+  if (state->canvas.zoom_in) {
+    state->canvas.zoom_in();
+  }
+}
+
+void zoom_out_clicked(
+    GtkButton*,
+    gpointer data) {
+  auto* state =
+      static_cast<State*>(data);
+
+  if (state->canvas.zoom_out) {
+    state->canvas.zoom_out();
+  }
+}
+
+void zoom_100_clicked(
+    GtkButton*,
+    gpointer data) {
+  auto* state =
+      static_cast<State*>(data);
+
+  if (state->canvas.zoom_100) {
+    state->canvas.zoom_100();
+  }
+}
+
+void zoom_fit_clicked(
+    GtkButton*,
+    gpointer data) {
+  auto* state =
+      static_cast<State*>(data);
+
+  if (state->canvas.zoom_fit) {
+    state->canvas.zoom_fit();
   }
 }
 
@@ -458,8 +700,14 @@ ToolOptionsBar create_tool_options_bar(
       GTK_BOX(paint),
       GTK_WIDGET(state->smoothing));
 
+  state->tip_options =
+      gtk_box_new(
+          GTK_ORIENTATION_HORIZONTAL,
+          6);
+
   gtk_box_append(
-      GTK_BOX(paint),
+      GTK_BOX(
+          state->tip_options),
       label("Punta"));
 
   const char* tips[] = {
@@ -491,12 +739,90 @@ ToolOptionsBar create_tool_options_bar(
       -1);
 
   gtk_box_append(
+      GTK_BOX(
+          state->tip_options),
+      GTK_WIDGET(
+          state->tip));
+
+  gtk_box_append(
       GTK_BOX(paint),
-      GTK_WIDGET(state->tip));
+      state->tip_options);
+
+  state->shape_fill =
+      GTK_CHECK_BUTTON(
+          gtk_check_button_new_with_label(
+              "Relleno"));
+
+  gtk_widget_set_tooltip_text(
+      GTK_WIDGET(
+          state->shape_fill),
+      "Crear la forma rellena");
+
+  gtk_box_append(
+      GTK_BOX(paint),
+      GTK_WIDGET(
+          state->shape_fill));
+
+  gtk_widget_set_visible(
+      GTK_WIDGET(
+          state->shape_fill),
+      FALSE);
+
+  g_signal_connect(
+      state->shape_fill,
+      "toggled",
+      G_CALLBACK(
+          shape_fill_changed),
+      state);
 
   gtk_box_append(
       GTK_BOX(root),
       paint);
+
+  GtkWidget* polygon_options =
+      gtk_box_new(
+          GTK_ORIENTATION_HORIZONTAL,
+          6);
+
+  state->polygon_options =
+      polygon_options;
+
+  gtk_box_append(
+      GTK_BOX(polygon_options),
+      label("Vértices"));
+
+  state->polygon_sides =
+      GTK_SPIN_BUTTON(
+          spin(
+              3,
+              32,
+              5));
+
+  gtk_widget_set_size_request(
+      GTK_WIDGET(
+          state->polygon_sides),
+      62,
+      -1);
+
+  gtk_box_append(
+      GTK_BOX(polygon_options),
+      GTK_WIDGET(
+          state->polygon_sides));
+
+  gtk_box_append(
+      GTK_BOX(root),
+      polygon_options);
+
+  gtk_widget_set_visible(
+      polygon_options,
+      FALSE);
+
+  g_signal_connect(
+      state->polygon_sides,
+      "value-changed",
+      G_CALLBACK(
+          polygon_sides_changed),
+      state);
 
   GtkWidget* text =
       gtk_box_new(
@@ -806,8 +1132,20 @@ ToolOptionsBar create_tool_options_bar(
 
   g_signal_connect(
       state->size,
+      "changed",
+      G_CALLBACK(size_text_changed),
+      state);
+
+  g_signal_connect(
+      state->size,
       "value-changed",
       G_CALLBACK(size_changed),
+      state);
+
+  g_signal_connect(
+      state->opacity,
+      "changed",
+      G_CALLBACK(opacity_text_changed),
       state);
 
   g_signal_connect(
@@ -818,14 +1156,32 @@ ToolOptionsBar create_tool_options_bar(
 
   g_signal_connect(
       state->softness,
+      "changed",
+      G_CALLBACK(softness_text_changed),
+      state);
+
+  g_signal_connect(
+      state->softness,
       "value-changed",
       G_CALLBACK(softness_changed),
       state);
 
   g_signal_connect(
       state->flow,
+      "changed",
+      G_CALLBACK(flow_text_changed),
+      state);
+
+  g_signal_connect(
+      state->flow,
       "value-changed",
       G_CALLBACK(flow_changed),
+      state);
+
+  g_signal_connect(
+      state->smoothing,
+      "changed",
+      G_CALLBACK(smoothing_text_changed),
       state);
 
   g_signal_connect(
@@ -858,6 +1214,179 @@ ToolOptionsBar create_tool_options_bar(
       G_CALLBACK(cancel_crop_clicked),
       state);
 
+  GtkWidget* pen =
+      gtk_box_new(
+          GTK_ORIENTATION_HORIZONTAL,
+          6);
+
+  state->pen_options = pen;
+
+  GtkWidget* pen_title =
+      gtk_label_new(
+          "Pluma");
+
+  gtk_widget_add_css_class(
+      pen_title,
+      "heading");
+
+  gtk_box_append(
+      GTK_BOX(pen),
+      pen_title);
+
+  GtkWidget* pen_hint =
+      gtk_label_new(
+          "Enter aplica · Esc cancela");
+
+  gtk_widget_add_css_class(
+      pen_hint,
+      "dim-label");
+
+  gtk_box_append(
+      GTK_BOX(pen),
+      pen_hint);
+
+  GtkWidget* pen_cancel =
+      gtk_button_new_with_label(
+          "Cancelar");
+
+  gtk_widget_add_css_class(
+      pen_cancel,
+      "flat");
+
+  gtk_box_append(
+      GTK_BOX(pen),
+      pen_cancel);
+
+  GtkWidget* pen_apply =
+      gtk_button_new_with_label(
+          "Aplicar");
+
+  gtk_widget_add_css_class(
+      pen_apply,
+      "suggested-action");
+
+  gtk_box_append(
+      GTK_BOX(pen),
+      pen_apply);
+
+  gtk_box_append(
+      GTK_BOX(root),
+      pen);
+
+  gtk_widget_set_visible(
+      pen,
+      FALSE);
+
+  g_signal_connect(
+      pen_cancel,
+      "clicked",
+      G_CALLBACK(
+          pen_cancel_clicked),
+      state);
+
+  g_signal_connect(
+      pen_apply,
+      "clicked",
+      G_CALLBACK(
+          pen_apply_clicked),
+      state);
+
+  GtkWidget* zoom =
+      gtk_box_new(
+          GTK_ORIENTATION_HORIZONTAL,
+          6);
+
+  state->zoom_options = zoom;
+
+  GtkWidget* zoom_title =
+      gtk_label_new(
+          "Zoom");
+
+  gtk_widget_add_css_class(
+      zoom_title,
+      "heading");
+
+  gtk_box_append(
+      GTK_BOX(zoom),
+      zoom_title);
+
+  GtkWidget* zoom_out =
+      gtk_button_new_with_label("-");
+
+  GtkWidget* zoom_100 =
+      gtk_button_new_with_label("100 %");
+
+  GtkWidget* zoom_fit =
+      gtk_button_new_with_label(
+          "Ajustar");
+
+  GtkWidget* zoom_in =
+      gtk_button_new_with_label("+");
+
+  gtk_box_append(
+      GTK_BOX(zoom),
+      zoom_out);
+
+  gtk_box_append(
+      GTK_BOX(zoom),
+      zoom_100);
+
+  gtk_box_append(
+      GTK_BOX(zoom),
+      zoom_fit);
+
+  gtk_box_append(
+      GTK_BOX(zoom),
+      zoom_in);
+
+  GtkWidget* zoom_hint =
+      gtk_label_new(
+          "Arrastra para ampliar zona · Ctrl+rueda");
+
+  gtk_widget_add_css_class(
+      zoom_hint,
+      "dim-label");
+
+  gtk_box_append(
+      GTK_BOX(zoom),
+      zoom_hint);
+
+  gtk_box_append(
+      GTK_BOX(root),
+      zoom);
+
+  gtk_widget_set_visible(
+      zoom,
+      FALSE);
+
+  g_signal_connect(
+      zoom_out,
+      "clicked",
+      G_CALLBACK(
+          zoom_out_clicked),
+      state);
+
+  g_signal_connect(
+      zoom_100,
+      "clicked",
+      G_CALLBACK(
+          zoom_100_clicked),
+      state);
+
+  g_signal_connect(
+      zoom_fit,
+      "clicked",
+      G_CALLBACK(
+          zoom_fit_clicked),
+      state);
+
+  g_signal_connect(
+      zoom_in,
+      "clicked",
+      G_CALLBACK(
+          zoom_in_clicked),
+      state);
+
   g_object_set_data_full(
       G_OBJECT(root),
       "lienzo-tool-options-state",
@@ -875,7 +1404,34 @@ ToolOptionsBar create_tool_options_bar(
         const bool paint =
             tool == Tool::Brush ||
             tool == Tool::Eraser ||
-            tool == Tool::Smudge;
+            tool == Tool::Smudge ||
+            tool == Tool::Clone ||
+            tool == Tool::Healing ||
+            tool == Tool::Dodge ||
+            tool == Tool::Line ||
+            tool == Tool::Rectangle ||
+            tool == Tool::Ellipse ||
+            tool == Tool::Circle ||
+            tool == Tool::Polygon ||
+            tool == Tool::BlurBrush ||
+            tool == Tool::SharpenBrush ||
+            tool == Tool::Burn ||
+            tool == Tool::Sponge;
+
+        const bool shape_tool =
+            tool == Tool::Line ||
+            tool == Tool::Rectangle ||
+            tool == Tool::Ellipse ||
+            tool == Tool::Circle ||
+            tool == Tool::Polygon ||
+            tool == Tool::CustomShape;
+
+        const bool fillable_shape =
+            tool == Tool::Rectangle ||
+            tool == Tool::Ellipse ||
+            tool == Tool::Circle ||
+            tool == Tool::Polygon ||
+            tool == Tool::CustomShape;
 
         const bool crop =
             tool == Tool::Crop;
@@ -883,9 +1439,31 @@ ToolOptionsBar create_tool_options_bar(
         const bool text =
             tool == Tool::Text;
 
+        const bool pen =
+            tool == Tool::Pen ||
+            tool == Tool::AddAnchor ||
+            tool == Tool::DeleteAnchor ||
+            tool == Tool::ConvertPoint;
+
+        const bool zoom =
+            tool == Tool::Zoom;
+
         gtk_widget_set_visible(
             state->paint_options,
             paint);
+
+        gtk_widget_set_visible(
+            GTK_WIDGET(
+                state->shape_fill),
+            fillable_shape);
+
+        gtk_widget_set_visible(
+            state->tip_options,
+            !shape_tool);
+
+        gtk_widget_set_visible(
+            state->polygon_options,
+            tool == Tool::Polygon);
 
         gtk_widget_set_visible(
             state->crop_options,
@@ -896,8 +1474,20 @@ ToolOptionsBar create_tool_options_bar(
             text);
 
         gtk_widget_set_visible(
+            state->pen_options,
+            pen);
+
+        gtk_widget_set_visible(
+            state->zoom_options,
+            zoom);
+
+        gtk_widget_set_visible(
             state->root,
-            paint || crop || text);
+            paint ||
+            crop ||
+            text ||
+            pen ||
+            zoom);
       };
 
   result.set_tool(

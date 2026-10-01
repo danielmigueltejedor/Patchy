@@ -26,9 +26,19 @@ struct CanvasView {
   std::function<void(bool)> set_airbrush;
   std::function<void(int)> set_smoothing;
   std::function<void(patchy::BrushShape)> set_brush_shape;
+  std::function<void(bool)> set_fill_shapes;
+  std::function<void(int)> set_polygon_sides;
 
   std::function<void()> commit_crop;
   std::function<void()> cancel_crop;
+
+  std::function<bool()> commit_pen;
+  std::function<void()> cancel_pen;
+
+  std::function<void()> zoom_in;
+  std::function<void()> zoom_out;
+  std::function<void()> zoom_100;
+  std::function<void()> zoom_fit;
 
   std::function<void(std::function<void()>)>
       set_document_changed_callback;

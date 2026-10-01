@@ -1067,7 +1067,7 @@ GtkWidget* create_inspector(
 
   gtk_widget_set_size_request(
       root,
-      170,
+      186,
       -1);
 
   GtkWidget* stack =
@@ -1086,7 +1086,19 @@ GtkWidget* create_inspector(
 
   gtk_widget_set_halign(
       switcher,
-      GTK_ALIGN_CENTER);
+      GTK_ALIGN_FILL);
+
+  gtk_widget_set_hexpand(
+      switcher,
+      TRUE);
+
+  gtk_widget_set_margin_start(
+      switcher,
+      8);
+
+  gtk_widget_set_margin_end(
+      switcher,
+      8);
 
   gtk_widget_set_margin_top(
       switcher,
