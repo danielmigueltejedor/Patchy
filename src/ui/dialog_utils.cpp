@@ -44,6 +44,7 @@
 #include <QPointer>
 #include <QTimer>
 #include <QPolygonF>
+#include <QProgressDialog>
 #include <QPushButton>
 #include <QScopeGuard>
 #include <QScreen>
@@ -1424,6 +1425,21 @@ void set_dialog_position_memory_id(QDialog& dialog, const QString& id) {
 
 void remember_dialog_position(QDialog& dialog) {
   if (dialog.property(kDialogPositionMemoryInstalledProperty).toBool()) {
+    return;
+  }
+
+  // A progress dialog is a transient status window ("Opening x..."): it has to
+  // appear where the user is looking, so it is centered on its owner every
+  // time and never records a position. A spot remembered from an earlier
+  // window layout put it far from the main window (Seth, September 2026).
+  // Any position an older build saved under its name is dropped here.
+  if (qobject_cast<QProgressDialog*>(&dialog) != nullptr) {
+    clear_dialog_position(dialog);
+#ifdef Q_OS_WASM
+    clamp_dialog_to_screen(dialog);
+#endif
+    dialog.move(centered_dialog_position(dialog));
+    dialog.setProperty(kDialogPositionMemoryInstalledProperty, true);
     return;
   }
 
