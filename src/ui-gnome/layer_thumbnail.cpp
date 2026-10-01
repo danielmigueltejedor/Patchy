@@ -76,55 +76,6 @@ GtkWidget* picture_from_rgba(
   return picture;
 }
 
-std::vector<std::uint8_t> resample_rgba(
-    const std::vector<std::uint8_t>& src,
-    int src_w,
-    int src_h,
-    int dst_w,
-    int dst_h) {
-  std::vector<std::uint8_t> dst(
-      static_cast<std::size_t>(dst_w) *
-      static_cast<std::size_t>(dst_h) *
-      4);
-
-  for (int y = 0; y < dst_h; ++y) {
-    const int sy =
-        std::clamp(
-            static_cast<int>(
-                (static_cast<double>(y) / dst_h) * src_h),
-            0,
-            src_h - 1);
-
-    for (int x = 0; x < dst_w; ++x) {
-      const int sx =
-          std::clamp(
-              static_cast<int>(
-                  (static_cast<double>(x) / dst_w) * src_w),
-              0,
-              src_w - 1);
-
-      const std::size_t si =
-          (static_cast<std::size_t>(sy) *
-               static_cast<std::size_t>(src_w) +
-           static_cast<std::size_t>(sx)) *
-          4;
-
-      const std::size_t di =
-          (static_cast<std::size_t>(y) *
-               static_cast<std::size_t>(dst_w) +
-           static_cast<std::size_t>(x)) *
-          4;
-
-      dst[di + 0] = src[si + 0];
-      dst[di + 1] = src[si + 1];
-      dst[di + 2] = src[si + 2];
-      dst[di + 3] = src[si + 3];
-    }
-  }
-
-  return dst;
-}
-
 GtkWidget* picture_from_pixels(
     const patchy::PixelBuffer& pixels,
     bool grayscale) {
@@ -147,25 +98,52 @@ GtkWidget* picture_from_pixels(
   const int channels =
       pixels.format().channels;
 
+  if (channels <= 0) {
+    return fallback_icon(
+        "image-x-generic-symbolic");
+  }
+
   std::vector<std::uint8_t> rgba(
-      static_cast<std::size_t>(src_w) *
-      static_cast<std::size_t>(src_h) *
+      static_cast<std::size_t>(kThumbSize) *
+      static_cast<std::size_t>(kThumbSize) *
       4);
 
-  for (int y = 0; y < src_h; ++y) {
-    for (int x = 0; x < src_w; ++x) {
+  for (int y = 0; y < kThumbSize; ++y) {
+    const int sy = std::clamp(
+        y * src_h / kThumbSize,
+        0,
+        src_h - 1);
+
+    const auto row = pixels.row(sy);
+
+    for (int x = 0; x < kThumbSize; ++x) {
+      const int sx = std::clamp(
+          x * src_w / kThumbSize,
+          0,
+          src_w - 1);
+
+      const std::size_t source_index =
+          static_cast<std::size_t>(sx) *
+          static_cast<std::size_t>(channels);
+
+      if (
+          source_index +
+              static_cast<std::size_t>(channels) >
+          row.size()) {
+        continue;
+      }
+
       const auto* source =
-          pixels.pixel(x, y);
+          row.data() + source_index;
 
       const std::size_t i =
           (static_cast<std::size_t>(y) *
-               static_cast<std::size_t>(src_w) +
+               static_cast<std::size_t>(kThumbSize) +
            static_cast<std::size_t>(x)) *
           4;
 
       if (grayscale) {
-        const std::uint8_t value =
-            source[0];
+        const std::uint8_t value = source[0];
 
         rgba[i + 0] = value;
         rgba[i + 1] = value;
@@ -173,57 +151,37 @@ GtkWidget* picture_from_pixels(
         rgba[i + 3] = 255;
       } else {
         const std::uint8_t alpha =
-            channels >= 4
-                ? source[3]
-                : 255;
+            channels >= 4 ? source[3] : 255;
 
         const bool checker_dark =
-            ((x / 8) + (y / 8)) % 2 == 0;
+            ((sx / 8) + (sy / 8)) % 2 == 0;
 
         const std::uint8_t checker =
-            checker_dark
-                ? 180
-                : 230;
+            checker_dark ? 180 : 230;
 
-        const double a =
-            alpha / 255.0;
+        const double coverage = alpha / 255.0;
 
-        rgba[i + 0] =
-            static_cast<std::uint8_t>(
-                source[0] * a +
-                checker * (1.0 - a));
+        rgba[i + 0] = static_cast<std::uint8_t>(
+            source[0] * coverage +
+            checker * (1.0 - coverage));
 
-        rgba[i + 1] =
-            static_cast<std::uint8_t>(
-                (channels >= 2
-                     ? source[1]
-                     : source[0]) *
-                    a +
-                checker * (1.0 - a));
+        rgba[i + 1] = static_cast<std::uint8_t>(
+            (channels >= 2 ? source[1] : source[0]) *
+                coverage +
+            checker * (1.0 - coverage));
 
-        rgba[i + 2] =
-            static_cast<std::uint8_t>(
-                (channels >= 3
-                     ? source[2]
-                     : source[0]) *
-                    a +
-                checker * (1.0 - a));
+        rgba[i + 2] = static_cast<std::uint8_t>(
+            (channels >= 3 ? source[2] : source[0]) *
+                coverage +
+            checker * (1.0 - coverage));
 
         rgba[i + 3] = 255;
       }
     }
   }
 
-  const auto scaled =
-      resample_rgba(
-          rgba,
-          src_w,
-          src_h,
-          kThumbSize,
-          kThumbSize);
-
   return picture_from_rgba(
-      scaled,
+      rgba,
       kThumbSize,
       kThumbSize);
 }

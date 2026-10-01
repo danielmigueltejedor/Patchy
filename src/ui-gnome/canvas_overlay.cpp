@@ -173,6 +173,110 @@ void draw_shape_preview(
     CanvasState* state,
     cairo_t* cr) {
   if (
+      state->shape_preview_active &&
+      state->tool == Tool::Gradient) {
+    const auto view = geometry(state);
+    const auto widget_x = [&view](double value) {
+      return view.x + value * view.zoom;
+    };
+    const auto widget_y = [&view](double value) {
+      return view.y + value * view.zoom;
+    };
+
+    const double x0 = widget_x(state->shape_preview_start_x);
+    const double y0 = widget_y(state->shape_preview_start_y);
+    const double x1 = widget_x(state->shape_preview_end_x);
+    const double y1 = widget_y(state->shape_preview_end_y);
+    const double left = widget_x(0.0);
+    const double top = widget_y(0.0);
+    const double right = widget_x(state->document->width());
+    const double bottom = widget_y(state->document->height());
+    const auto& start_color =
+        state->gradient_reverse
+            ? state->edit_options.secondary
+            : state->edit_options.primary;
+    const auto& end_color =
+        state->gradient_reverse
+            ? state->edit_options.primary
+            : state->edit_options.secondary;
+    const double preview_alpha =
+        std::clamp(
+            static_cast<double>(state->gradient_opacity),
+            0.0,
+            1.0);
+
+    cairo_save(cr);
+    cairo_rectangle(
+        cr,
+        left,
+        top,
+        std::max(0.0, right - left),
+        std::max(0.0, bottom - top));
+    cairo_clip(cr);
+
+    const double radius = std::hypot(x1 - x0, y1 - y0);
+    cairo_pattern_t* pattern =
+        state->gradient_method == patchy::GradientMethod::Radial
+            ? cairo_pattern_create_radial(
+                  x0,
+                  y0,
+                  0.0,
+                  x0,
+                  y0,
+                  std::max(radius, 1.0))
+            : cairo_pattern_create_linear(x0, y0, x1, y1);
+    cairo_pattern_set_extend(pattern, CAIRO_EXTEND_PAD);
+    cairo_pattern_add_color_stop_rgba(
+        pattern,
+        0.0,
+        start_color.r / 255.0,
+        start_color.g / 255.0,
+        start_color.b / 255.0,
+        preview_alpha);
+    cairo_pattern_add_color_stop_rgba(
+        pattern,
+        1.0,
+        end_color.r / 255.0,
+        end_color.g / 255.0,
+        end_color.b / 255.0,
+        preview_alpha);
+    cairo_set_source(cr, pattern);
+    cairo_paint(cr);
+    cairo_pattern_destroy(pattern);
+    cairo_restore(cr);
+
+    cairo_save(cr);
+    cairo_set_line_width(cr, 1.4);
+    cairo_set_source_rgba(cr, 0.05, 0.06, 0.08, 0.9);
+    cairo_move_to(cr, x0, y0);
+    cairo_line_to(cr, x1, y1);
+    cairo_stroke(cr);
+    cairo_set_line_width(cr, 1.0);
+    cairo_set_source_rgba(cr, 0.96, 0.97, 0.99, 0.95);
+    cairo_move_to(cr, x0, y0);
+    cairo_line_to(cr, x1, y1);
+    cairo_stroke(cr);
+    cairo_arc(cr, x0, y0, 4.0, 0.0, 2.0 * G_PI);
+    cairo_set_source_rgba(
+        cr,
+        start_color.r / 255.0,
+        start_color.g / 255.0,
+        start_color.b / 255.0,
+        1.0);
+    cairo_fill(cr);
+    cairo_arc(cr, x1, y1, 4.0, 0.0, 2.0 * G_PI);
+    cairo_set_source_rgba(
+        cr,
+        end_color.r / 255.0,
+        end_color.g / 255.0,
+        end_color.b / 255.0,
+        1.0);
+    cairo_fill(cr);
+    cairo_restore(cr);
+    return;
+  }
+
+  if (
       !state->shape_preview_active ||
       !shape_drag_tool(
           state->tool)) {
@@ -1001,6 +1105,129 @@ void draw_magnetic_lasso_overlay(
   cairo_restore(cr);
 }
 
+void stroke_pointer(cairo_t* cr) {
+  cairo_set_line_cap(
+      cr,
+      CAIRO_LINE_CAP_ROUND);
+
+  cairo_set_line_join(
+      cr,
+      CAIRO_LINE_JOIN_ROUND);
+
+  cairo_set_source_rgba(
+      cr,
+      0.05,
+      0.06,
+      0.08,
+      0.92);
+
+  cairo_set_line_width(cr, 3.2);
+  cairo_stroke_preserve(cr);
+
+  cairo_set_source_rgba(
+      cr,
+      0.96,
+      0.97,
+      0.99,
+      0.96);
+
+  cairo_set_line_width(cr, 1.25);
+  cairo_stroke(cr);
+}
+
+bool tool_draws_brush_footprint(Tool tool) {
+  switch (tool) {
+    case Tool::Brush:
+    case Tool::MixerBrush:
+    case Tool::Eraser:
+    case Tool::Smudge:
+    case Tool::BlurBrush:
+    case Tool::SharpenBrush:
+    case Tool::Dodge:
+    case Tool::Burn:
+    case Tool::Sponge:
+    case Tool::Clone:
+    case Tool::PatternStamp:
+    case Tool::Healing:
+    case Tool::SpotHealing:
+    case Tool::PatchTool:
+      return true;
+    default:
+      return false;
+  }
+}
+
+void add_footprint_mark(
+    cairo_t* cr,
+    Tool tool) {
+  switch (tool) {
+    case Tool::Eraser:
+      cairo_move_to(cr, -3.5, -3.5);
+      cairo_line_to(cr, 3.5, 3.5);
+      cairo_move_to(cr, 3.5, -3.5);
+      cairo_line_to(cr, -3.5, 3.5);
+      break;
+    case Tool::Dodge:
+      cairo_move_to(cr, -3.5, 1.5);
+      cairo_line_to(cr, 0.0, -2.5);
+      cairo_line_to(cr, 3.5, 1.5);
+      break;
+    case Tool::Burn:
+      cairo_move_to(cr, -3.5, -1.5);
+      cairo_line_to(cr, 0.0, 2.5);
+      cairo_line_to(cr, 3.5, -1.5);
+      break;
+    case Tool::Sponge:
+      cairo_arc(cr, 0.0, 0.0, 3.2, 0.0, 2.0 * G_PI);
+      break;
+    case Tool::BlurBrush:
+      cairo_move_to(cr, -4.0, -2.0);
+      cairo_line_to(cr, 4.0, -2.0);
+      cairo_move_to(cr, -2.5, 0.5);
+      cairo_line_to(cr, 2.5, 0.5);
+      cairo_move_to(cr, -1.0, 3.0);
+      cairo_line_to(cr, 1.0, 3.0);
+      break;
+    case Tool::SharpenBrush:
+      cairo_move_to(cr, 0.0, -4.0);
+      cairo_line_to(cr, 3.5, 0.0);
+      cairo_line_to(cr, 0.0, 4.0);
+      cairo_line_to(cr, -3.5, 0.0);
+      cairo_close_path(cr);
+      break;
+    case Tool::Smudge:
+      cairo_move_to(cr, -3.5, 2.0);
+      cairo_curve_to(cr, -1.0, -3.0, 1.0, 3.0, 3.5, -2.0);
+      break;
+    case Tool::Clone:
+      cairo_move_to(cr, -4.0, -1.0);
+      cairo_line_to(cr, -1.0, -1.0);
+      cairo_move_to(cr, -4.0, -1.0);
+      cairo_line_to(cr, -4.0, 2.0);
+      cairo_move_to(cr, 1.0, -2.0);
+      cairo_line_to(cr, 1.0, 1.0);
+      cairo_move_to(cr, 1.0, 1.0);
+      cairo_line_to(cr, 4.0, 1.0);
+      break;
+    case Tool::Healing:
+    case Tool::SpotHealing:
+      cairo_move_to(cr, -3.5, 0.0);
+      cairo_line_to(cr, 3.5, 0.0);
+      cairo_move_to(cr, 0.0, -3.5);
+      cairo_line_to(cr, 0.0, 3.5);
+      break;
+    case Tool::PatchTool:
+      cairo_rectangle(cr, -3.5, -3.5, 7.0, 7.0);
+      break;
+    case Tool::MixerBrush:
+      cairo_arc(cr, 0.0, 0.0, 2.4, 0.0, 2.0 * G_PI);
+      break;
+    default:
+      cairo_arc(cr, 0.0, 0.0, 1.3, 0.0, 2.0 * G_PI);
+      break;
+  }
+}
+
 void draw_brush_cursor_overlay(
     CanvasState* state,
     cairo_t* cr) {
@@ -1008,10 +1235,7 @@ void draw_brush_cursor_overlay(
     return;
   }
 
-  if (
-      state->tool != Tool::Brush &&
-      state->tool != Tool::Eraser &&
-      state->tool != Tool::Smudge) {
+  if (!tool_draws_brush_footprint(state->tool)) {
     return;
   }
 
@@ -1032,78 +1256,338 @@ void draw_brush_cursor_overlay(
 
   const double diameter =
       std::max(
-          4.0,
-          state->edit_options.brush_size *
+          1.0,
+          static_cast<double>(
+              state->edit_options.brush_size) *
               view.zoom);
 
-  const double radius =
+  const double roundness =
+      std::clamp(
+          state->edit_options.brush_roundness,
+          1,
+          100) /
+      100.0;
+
+  const double half_width =
       diameter * 0.5;
 
-  // Halo oscuro + línea clara: permanece visible sobre cualquier imagen.
-  cairo_set_line_width(cr, 3.0);
+  const double half_height =
+      half_width * roundness;
 
+  const bool square =
+      state->edit_options.brush_shape ==
+      patchy::BrushShape::Square;
+
+  const double softness =
+      std::clamp(
+          state->edit_options.brush_softness,
+          0,
+          100) /
+      100.0;
+
+  auto stroke_footprint =
+      [&](double inset) {
+        const double inset_x =
+            std::max(0.5, half_width - inset);
+
+        const double inset_y =
+            std::max(
+                0.5,
+                half_height - inset);
+
+        if (square) {
+          cairo_rectangle(
+              cr,
+              -inset_x,
+              -inset_y,
+              inset_x * 2.0,
+              inset_y * 2.0);
+        } else if (roundness >= 0.999) {
+          cairo_arc(
+              cr,
+              0.0,
+              0.0,
+              inset_x,
+              0.0,
+              2.0 * G_PI);
+        } else {
+          cairo_save(cr);
+          cairo_scale(
+              cr,
+              1.0,
+              roundness);
+          cairo_arc(
+              cr,
+              0.0,
+              0.0,
+              inset_x,
+              0.0,
+              2.0 * G_PI);
+          cairo_stroke(cr);
+          cairo_restore(cr);
+          return;
+        }
+
+        cairo_stroke(cr);
+      };
+
+  cairo_save(cr);
+  cairo_translate(
+      cr,
+      state->hover_x,
+      state->hover_y);
+  cairo_rotate(
+      cr,
+      state->edit_options.brush_angle_degrees *
+          (G_PI / 180.0));
+
+  cairo_set_line_width(cr, 3.0);
   cairo_set_source_rgba(
       cr,
       0.05,
       0.06,
       0.08,
       0.9);
-
-  cairo_arc(
-      cr,
-      state->hover_x,
-      state->hover_y,
-      radius,
-      0.0,
-      2.0 * G_PI);
-
-  cairo_stroke(cr);
+  stroke_footprint(0.0);
 
   cairo_set_line_width(cr, 1.2);
-
   cairo_set_source_rgba(
       cr,
       0.96,
       0.97,
       0.99,
       0.95);
+  stroke_footprint(0.0);
 
-  cairo_arc(
-      cr,
-      state->hover_x,
-      state->hover_y,
-      radius,
-      0.0,
-      2.0 * G_PI);
+  if (softness > 0.02 && diameter > 8.0) {
+    const double inner =
+        diameter * (1.0 - softness) * 0.5;
 
-  cairo_stroke(cr);
+    if (inner > 1.5) {
+      const double dashes[] = {3.0, 3.0};
 
-  // El borrador se distingue inmediatamente.
-  if (state->tool == Tool::Eraser) {
-    cairo_set_line_width(cr, 1.4);
-
-    cairo_move_to(
-        cr,
-        state->hover_x - 4.0,
-        state->hover_y - 4.0);
-
-    cairo_line_to(
-        cr,
-        state->hover_x + 4.0,
-        state->hover_y + 4.0);
-
-    cairo_move_to(
-        cr,
-        state->hover_x + 4.0,
-        state->hover_y - 4.0);
-
-    cairo_line_to(
-        cr,
-        state->hover_x - 4.0,
-        state->hover_y + 4.0);
-
-    cairo_stroke(cr);
+      cairo_set_dash(
+          cr,
+          dashes,
+          2,
+          0.0);
+      stroke_footprint(
+          half_width - inner);
+      cairo_set_dash(
+          cr,
+          nullptr,
+          0,
+          0.0);
+    }
   }
+
+  cairo_new_path(cr);
+  add_footprint_mark(cr, state->tool);
+  stroke_pointer(cr);
+
+  cairo_restore(cr);
+}
+
+void add_crosshair(cairo_t* cr) {
+  cairo_move_to(cr, -8.0, 0.0);
+  cairo_line_to(cr, -3.0, 0.0);
+  cairo_move_to(cr, 3.0, 0.0);
+  cairo_line_to(cr, 8.0, 0.0);
+  cairo_move_to(cr, 0.0, -8.0);
+  cairo_line_to(cr, 0.0, -3.0);
+  cairo_move_to(cr, 0.0, 3.0);
+  cairo_line_to(cr, 0.0, 8.0);
+}
+
+void add_arrow_cursor(cairo_t* cr) {
+  cairo_move_to(cr, 0.0, 0.0);
+  cairo_line_to(cr, 0.0, 13.0);
+  cairo_line_to(cr, 3.2, 10.0);
+  cairo_line_to(cr, 6.4, 15.0);
+  cairo_line_to(cr, 8.6, 13.6);
+  cairo_line_to(cr, 5.2, 8.4);
+  cairo_line_to(cr, 9.2, 8.4);
+  cairo_close_path(cr);
+}
+
+void fill_pointer(cairo_t* cr) {
+  cairo_set_source_rgba(cr, 0.08, 0.09, 0.11, 0.96);
+  cairo_fill_preserve(cr);
+  cairo_set_source_rgba(cr, 0.96, 0.97, 0.99, 0.98);
+  cairo_set_line_width(cr, 1.15);
+  cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+  cairo_stroke(cr);
+}
+
+void draw_tool_pointer_overlay(
+    CanvasState* state,
+    cairo_t* cr) {
+  if (
+      !state->hover_valid ||
+      state->tool == Tool::Eyedropper ||
+      tool_draws_brush_footprint(state->tool)) {
+    return;
+  }
+
+  cairo_save(cr);
+  cairo_translate(cr, state->hover_x, state->hover_y);
+  cairo_new_path(cr);
+
+  bool filled = false;
+
+  switch (state->tool) {
+    case Tool::Move:
+      cairo_move_to(cr, -7.0, 0.0);
+      cairo_line_to(cr, 7.0, 0.0);
+      cairo_move_to(cr, 0.0, -7.0);
+      cairo_line_to(cr, 0.0, 7.0);
+      cairo_move_to(cr, -7.0, 0.0);
+      cairo_line_to(cr, -4.2, -2.2);
+      cairo_move_to(cr, -7.0, 0.0);
+      cairo_line_to(cr, -4.2, 2.2);
+      cairo_move_to(cr, 7.0, 0.0);
+      cairo_line_to(cr, 4.2, -2.2);
+      cairo_move_to(cr, 7.0, 0.0);
+      cairo_line_to(cr, 4.2, 2.2);
+      cairo_move_to(cr, 0.0, -7.0);
+      cairo_line_to(cr, -2.2, -4.2);
+      cairo_move_to(cr, 0.0, -7.0);
+      cairo_line_to(cr, 2.2, -4.2);
+      cairo_move_to(cr, 0.0, 7.0);
+      cairo_line_to(cr, -2.2, 4.2);
+      cairo_move_to(cr, 0.0, 7.0);
+      cairo_line_to(cr, 2.2, 4.2);
+      break;
+    case Tool::Marquee:
+    case Tool::EllipticalMarquee:
+    case Tool::Rectangle:
+    case Tool::Ellipse:
+    case Tool::Circle:
+    case Tool::Polygon:
+    case Tool::CustomShape:
+    case Tool::Line:
+    case Tool::Gradient:
+    case Tool::QuickSelect:
+      add_crosshair(cr);
+      break;
+    case Tool::Lasso:
+    case Tool::MagneticLasso:
+      cairo_move_to(cr, 0.0, 0.0);
+      cairo_curve_to(cr, 2.0, -6.0, 9.0, -4.0, 8.0, -10.0);
+      cairo_curve_to(cr, 7.0, -15.0, 1.0, -15.0, 0.5, -10.0);
+      break;
+    case Tool::MagicWand:
+      cairo_move_to(cr, 0.0, 0.0);
+      cairo_line_to(cr, 7.0, -9.0);
+      cairo_move_to(cr, 5.0, -12.0);
+      cairo_line_to(cr, 11.0, -12.0);
+      cairo_move_to(cr, 8.0, -15.0);
+      cairo_line_to(cr, 8.0, -9.0);
+      cairo_move_to(cr, 6.2, -13.8);
+      cairo_line_to(cr, 9.8, -10.2);
+      cairo_move_to(cr, 6.2, -10.2);
+      cairo_line_to(cr, 9.8, -13.8);
+      break;
+    case Tool::Crop:
+      cairo_move_to(cr, -7.0, -3.0);
+      cairo_line_to(cr, -7.0, -7.0);
+      cairo_line_to(cr, -3.0, -7.0);
+      cairo_move_to(cr, 3.0, -7.0);
+      cairo_line_to(cr, 7.0, -7.0);
+      cairo_line_to(cr, 7.0, -3.0);
+      cairo_move_to(cr, 7.0, 3.0);
+      cairo_line_to(cr, 7.0, 7.0);
+      cairo_line_to(cr, 3.0, 7.0);
+      cairo_move_to(cr, -3.0, 7.0);
+      cairo_line_to(cr, -7.0, 7.0);
+      cairo_line_to(cr, -7.0, 3.0);
+      break;
+    case Tool::Fill:
+      cairo_move_to(cr, 0.0, 0.0);
+      cairo_line_to(cr, -2.2, -4.0);
+      cairo_line_to(cr, -6.0, -4.0);
+      cairo_line_to(cr, -6.0, -12.0);
+      cairo_line_to(cr, 3.0, -12.0);
+      cairo_line_to(cr, 5.5, -8.5);
+      cairo_line_to(cr, 2.2, -6.5);
+      cairo_line_to(cr, 2.2, -4.0);
+      cairo_close_path(cr);
+      filled = true;
+      break;
+    case Tool::Pen:
+    case Tool::AddAnchor:
+    case Tool::DeleteAnchor:
+    case Tool::ConvertPoint:
+      cairo_move_to(cr, 0.0, 0.0);
+      cairo_line_to(cr, 4.5, -11.0);
+      cairo_line_to(cr, -2.5, -9.0);
+      cairo_close_path(cr);
+      fill_pointer(cr);
+      cairo_new_path(cr);
+      if (state->tool == Tool::AddAnchor) {
+        cairo_move_to(cr, 6.0, -12.0);
+        cairo_line_to(cr, 12.0, -12.0);
+        cairo_move_to(cr, 9.0, -15.0);
+        cairo_line_to(cr, 9.0, -9.0);
+      } else if (state->tool == Tool::DeleteAnchor) {
+        cairo_move_to(cr, 6.0, -12.0);
+        cairo_line_to(cr, 12.0, -12.0);
+      } else if (state->tool == Tool::ConvertPoint) {
+        cairo_move_to(cr, 6.0, -9.0);
+        cairo_line_to(cr, 12.0, -15.0);
+        cairo_move_to(cr, 9.5, -9.5);
+        cairo_line_to(cr, 12.0, -9.0);
+        cairo_line_to(cr, 11.5, -11.5);
+      }
+      break;
+    case Tool::PathSelect:
+      add_arrow_cursor(cr);
+      filled = true;
+      break;
+    case Tool::DirectSelect:
+      add_arrow_cursor(cr);
+      break;
+    case Tool::Text:
+      cairo_move_to(cr, 0.0, -8.0);
+      cairo_line_to(cr, 0.0, 8.0);
+      cairo_move_to(cr, -3.5, -8.0);
+      cairo_line_to(cr, 3.5, -8.0);
+      cairo_move_to(cr, -3.5, 8.0);
+      cairo_line_to(cr, 3.5, 8.0);
+      break;
+    case Tool::Hand:
+      cairo_rectangle(cr, -5.0, -1.0, 10.0, 8.0);
+      cairo_rectangle(cr, -5.0, -8.0, 2.4, 8.0);
+      cairo_rectangle(cr, -1.6, -9.0, 2.4, 9.0);
+      cairo_rectangle(cr, 1.8, -8.0, 2.4, 8.0);
+      cairo_move_to(cr, -5.0, 2.0);
+      cairo_line_to(cr, -9.0, 1.0);
+      cairo_line_to(cr, -8.2, 5.0);
+      cairo_line_to(cr, -5.0, 5.5);
+      cairo_close_path(cr);
+      filled = true;
+      break;
+    case Tool::Zoom:
+      cairo_arc(cr, -1.5, -1.5, 5.5, 0.0, 2.0 * G_PI);
+      cairo_move_to(cr, 2.4, 2.4);
+      cairo_line_to(cr, 7.0, 7.0);
+      cairo_move_to(cr, -4.0, -1.5);
+      cairo_line_to(cr, 1.0, -1.5);
+      cairo_move_to(cr, -1.5, -4.0);
+      cairo_line_to(cr, -1.5, 1.0);
+      break;
+    default:
+      add_crosshair(cr);
+      break;
+  }
+
+  if (filled) {
+    fill_pointer(cr);
+  } else {
+    stroke_pointer(cr);
+  }
+
+  cairo_restore(cr);
 }
 
 void draw_crop_overlay(
@@ -1344,13 +1828,15 @@ eyedropper_hover_color(
 void draw_eyedropper_overlay(
     CanvasState* state,
     cairo_t* cr) {
+  if (
+      state->tool != Tool::Eyedropper ||
+      !state->hover_valid) {
+    return;
+  }
+
   const auto sampled =
       eyedropper_hover_color(
           state);
-
-  if (!sampled.has_value()) {
-    return;
-  }
 
   const auto foreground =
       state->edit_options.primary;
@@ -1361,14 +1847,28 @@ void draw_eyedropper_overlay(
   const double cy =
       state->hover_y;
 
+  cairo_save(cr);
+  cairo_new_path(cr);
+  cairo_arc(cr, cx - 16.0, cy - 18.0, 5.5, 0.0, 2.0 * G_PI);
+  cairo_move_to(cr, cx - 12.5, cy - 14.5);
+  cairo_line_to(cr, cx - 1.5, cy - 1.5);
+  cairo_move_to(cr, cx - 1.5, cy - 1.5);
+  cairo_line_to(cr, cx + 2.0, cy + 2.0);
+  stroke_pointer(cr);
+  cairo_restore(cr);
+
+  if (!sampled.has_value()) {
+    return;
+  }
+
   constexpr double radius =
-      30.0;
+      18.0;
 
   constexpr double halo_width =
-      8.0;
+      5.0;
 
   constexpr double color_width =
-      5.0;
+      3.2;
 
   constexpr double gap =
       0.18;

@@ -14,4 +14,11 @@ GtkWidget* create_inspector(
 void refresh_inspector(
     GtkWidget* inspector);
 
+void update_inspector_composite(
+    GtkWidget* inspector,
+    const std::uint8_t* rgba,
+    int width,
+    int height,
+    int stride);
+
 }

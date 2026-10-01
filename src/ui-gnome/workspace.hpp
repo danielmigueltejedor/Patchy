@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/document.hpp"
+#include "ui-gnome/canvas.hpp"
 #include "ui-gnome/tool_palette.hpp"
 
 #include <gtk/gtk.h>
@@ -12,6 +13,7 @@ namespace lienzo::gnome {
 GtkWidget* create_workspace(
     const patchy::Document& document,
     Tool current_tool,
-    ToolSelectedCallback tool_selected);
+    ToolSelectedCallback tool_selected,
+    const CanvasPreview* prepared = nullptr);
 
 }  // namespace lienzo::gnome

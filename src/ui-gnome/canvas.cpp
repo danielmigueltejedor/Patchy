@@ -27,7 +27,8 @@ namespace lienzo::gnome {
 
 CanvasView create_canvas_view(
     patchy::Document& document,
-    Tool initial_tool) {
+    Tool initial_tool,
+    const CanvasPreview* prepared) {
   GtkWidget* area =
       gtk_drawing_area_new();
 
@@ -115,7 +116,25 @@ CanvasView create_canvas_view(
       state,
       0);
 
-  rebuild_canvas_cache(state);
+  state->composite_slot =
+      std::make_shared<std::function<void(
+          const std::uint8_t*,
+          int,
+          int,
+          int)>>();
+
+  if (
+      prepared != nullptr &&
+      prepared->width > 0 &&
+      prepared->height > 0 &&
+      !prepared->rgba.empty()) {
+    upload_canvas_preview(
+        state,
+        *prepared);
+  } else {
+    state->full_refresh_pending = true;
+    schedule_canvas_refresh(state);
+  }
 
   state->text_controller =
       std::make_unique<TextController>(
@@ -153,7 +172,33 @@ CanvasView create_canvas_view(
       "lienzo-canvas-state",
       state,
       [](gpointer data) {
-        delete static_cast<CanvasState*>(data);
+        auto* canvas_state =
+            static_cast<CanvasState*>(data);
+
+        if (canvas_state->refresh_timer != 0) {
+          g_source_remove(
+              canvas_state->refresh_timer);
+          canvas_state->refresh_timer = 0;
+        }
+
+        if (
+            canvas_state
+                ->selection_animation_timer !=
+            0) {
+          g_source_remove(
+              canvas_state
+                  ->selection_animation_timer);
+          canvas_state
+              ->selection_animation_timer = 0;
+        }
+
+        if (canvas_state->airbrush_timer != 0) {
+          g_source_remove(
+              canvas_state->airbrush_timer);
+          canvas_state->airbrush_timer = 0;
+        }
+
+        delete canvas_state;
       });
 
   gtk_drawing_area_set_draw_func(
@@ -423,6 +468,86 @@ CanvasView create_canvas_view(
         update_brush_alpha(state);
       };
 
+  result.set_gradient_method =
+      [state](patchy::GradientMethod method) {
+        state->gradient_method = method;
+        gtk_widget_queue_draw(GTK_WIDGET(state->area));
+      };
+
+  result.set_gradient_opacity =
+      [state](int value) {
+        state->gradient_opacity =
+            std::clamp(value, 1, 100) / 100.0F;
+        gtk_widget_queue_draw(GTK_WIDGET(state->area));
+      };
+
+  result.set_gradient_reverse =
+      [state](bool reverse) {
+        state->gradient_reverse = reverse;
+        gtk_widget_queue_draw(GTK_WIDGET(state->area));
+      };
+
+  result.set_flood_tolerance =
+      [state](int value) {
+        state->edit_options.flood_tolerance =
+            std::clamp(value, 0, 255);
+      };
+
+  result.set_flood_contiguous =
+      [state](bool contiguous) {
+        state->edit_options.flood_contiguous = contiguous;
+      };
+
+  result.set_wand_tolerance =
+      [state](int value) {
+        state->wand_tolerance = std::clamp(value, 0, 255);
+      };
+
+  result.set_wand_contiguous =
+      [state](bool contiguous) {
+        state->wand_contiguous = contiguous;
+      };
+
+  result.set_tone_range =
+      [state](patchy::LocalToneRange range) {
+        state->local_adjustment.tone_range = range;
+
+        if (state->retouch_controller) {
+          state->retouch_controller->set_adjustment_settings(
+              state->local_adjustment);
+        }
+      };
+
+  result.set_protect_tones =
+      [state](bool protect) {
+        state->local_adjustment.protect_tones = protect;
+
+        if (state->retouch_controller) {
+          state->retouch_controller->set_adjustment_settings(
+              state->local_adjustment);
+        }
+      };
+
+  result.set_sponge_mode =
+      [state](patchy::SpongeMode mode) {
+        state->local_adjustment.sponge_mode = mode;
+
+        if (state->retouch_controller) {
+          state->retouch_controller->set_adjustment_settings(
+              state->local_adjustment);
+        }
+      };
+
+  result.set_healing_diffusion =
+      [state](int diffusion) {
+        state->healing_diffusion = std::clamp(diffusion, 1, 7);
+
+        if (state->retouch_controller) {
+          state->retouch_controller->set_healing_diffusion(
+              state->healing_diffusion);
+        }
+      };
+
   result.set_airbrush =
       [state](bool enabled) {
         state->airbrush = enabled;
@@ -468,12 +593,12 @@ CanvasView create_canvas_view(
 
   result.commit_crop =
       [state] {
-        (void)commit_crop(state);
+        return commit_crop(state);
       };
 
   result.cancel_crop =
       [state] {
-        cancel_crop(state);
+        return cancel_crop(state);
       };
 
   result.commit_pen =
@@ -575,6 +700,23 @@ CanvasView create_canvas_view(
       [state](std::function<void()> callback) {
         state->document_changed_callback =
             std::move(callback);
+      };
+
+  result.set_composite_callback =
+      [slot = state->composite_slot](
+          std::function<void(
+              const std::uint8_t*,
+              int,
+              int,
+              int)> callback) {
+        if (slot) {
+          *slot = std::move(callback);
+        }
+      };
+
+  result.publish_composite =
+      [state] {
+        publish_canvas_composite(state);
       };
 
   result.checkpoint =

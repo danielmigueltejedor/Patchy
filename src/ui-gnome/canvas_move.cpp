@@ -59,6 +59,11 @@ make_move_preview_composite_surface(
       cairo_image_surface_get_data(
           surface);
 
+  if (data == nullptr) {
+    cairo_surface_destroy(surface);
+    return nullptr;
+  }
+
   const int stride =
       cairo_image_surface_get_stride(
           surface);
@@ -170,6 +175,11 @@ make_move_preview_layer_surface(
   auto* destination =
       cairo_image_surface_get_data(
           surface);
+
+  if (destination == nullptr) {
+    cairo_surface_destroy(surface);
+    return nullptr;
+  }
 
   const int destination_stride =
       cairo_image_surface_get_stride(

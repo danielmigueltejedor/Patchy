@@ -85,19 +85,54 @@ void notify_document_changed(
   }
 }
 
+std::size_t layer_pixel_bytes(
+    const std::vector<patchy::Layer>& layers) {
+  std::size_t bytes = 0;
+
+  for (const auto& layer : layers) {
+    bytes += layer.pixels().byte_size();
+
+    if (layer.mask().has_value()) {
+      bytes += layer.mask()->pixels.byte_size();
+    }
+
+    bytes += layer_pixel_bytes(layer.children());
+  }
+
+  return bytes;
+}
+
+void trim_history(
+    std::vector<patchy::Document>& stack,
+    std::size_t bytes) {
+  constexpr std::size_t kMaxHistory = 32;
+  constexpr std::size_t kMaxBytes =
+      512ull * 1024ull * 1024ull;
+
+  std::size_t limit = kMaxHistory;
+
+  if (bytes > 0) {
+    limit = std::min(
+        kMaxHistory,
+        std::max(
+            std::size_t{1},
+            kMaxBytes / bytes));
+  }
+
+  while (stack.size() > limit) {
+    stack.erase(stack.begin());
+  }
+}
+
 void push_history(
     CanvasState* state) {
   state->undo_stack.push_back(
       *state->document);
 
-  constexpr std::size_t kMaxHistory = 32;
-
-  if (
-      state->undo_stack.size() >
-      kMaxHistory) {
-    state->undo_stack.erase(
-        state->undo_stack.begin());
-  }
+  trim_history(
+      state->undo_stack,
+      layer_pixel_bytes(
+          state->document->layers()));
 
   state->redo_stack.clear();
 }
@@ -110,6 +145,11 @@ void undo_document(
 
   state->redo_stack.push_back(
       *state->document);
+
+  trim_history(
+      state->redo_stack,
+      layer_pixel_bytes(
+          state->document->layers()));
 
   *state->document =
       std::move(
@@ -250,16 +290,18 @@ bool commit_crop(
   return true;
 }
 
-void cancel_crop(
+bool cancel_crop(
     CanvasState* state) {
   if (!state->crop_session_active) {
-    return;
+    return false;
   }
 
   state->crop_session_active = false;
 
   gtk_widget_queue_draw(
       GTK_WIDGET(state->area));
+
+  return true;
 }
 
 }  // namespace lienzo::gnome

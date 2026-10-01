@@ -2,6 +2,7 @@
 
 #include "core/document.hpp"
 #include "core/pixel_tools.hpp"
+#include "core/retouch_brush.hpp"
 
 #include <cairo.h>
 
@@ -28,6 +29,8 @@ struct RetouchBrushSettings {
   int size{24};
   int softness{20};
   int opacity{100};
+  int roundness{100};
+  double angle_degrees{0.0};
 };
 
 class RetouchController {
@@ -38,6 +41,12 @@ public:
   void set_source(
       int x,
       int y);
+
+  void set_adjustment_settings(
+      const patchy::LocalAdjustmentSettings& settings);
+
+  void set_healing_diffusion(
+      int diffusion);
 
   [[nodiscard]] bool source_set() const noexcept;
 
@@ -71,21 +80,9 @@ private:
       double x1,
       double y1);
 
-  [[nodiscard]] const std::uint8_t* sample(
-      int x,
-      int y) const;
+  [[nodiscard]] patchy::RgbaPlane plane() const noexcept;
 
-  [[nodiscard]] std::array<double, 3> ring_tone(
-      int x,
-      int y,
-      int radius) const;
-
-  [[nodiscard]] std::array<std::uint8_t, 4> healing_sample(
-      int source_x,
-      int source_y,
-      int destination_x,
-      int destination_y,
-      int radius) const;
+  [[nodiscard]] bool copy_layer_snapshot();
 
   patchy::Document* document_{};
 
@@ -98,11 +95,16 @@ private:
   int width_{0};
   int height_{0};
   int stride_{0};
+  int origin_x_{0};
+  int origin_y_{0};
+  std::uint16_t channels_{4};
 
   RetouchMode mode_{
       RetouchMode::Clone};
 
   RetouchBrushSettings settings_{};
+  patchy::LocalAdjustmentSettings adjustment_{};
+  int healing_diffusion_{5};
 
   std::function<float(int, int)>
       selection_coverage_;
@@ -114,6 +116,7 @@ private:
 
   int offset_x_{0};
   int offset_y_{0};
+  bool aligned_offset_set_{false};
 
   std::unordered_map<std::uint64_t, float>
       stroke_caps_;

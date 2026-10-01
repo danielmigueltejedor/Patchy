@@ -157,15 +157,17 @@ gboolean workspace_key_pressed(
   if (
       keyval == GDK_KEY_Return ||
       keyval == GDK_KEY_KP_Enter) {
-    if (state->canvas.commit_crop) {
-      state->canvas.commit_crop();
+    if (
+        state->canvas.commit_crop &&
+        state->canvas.commit_crop()) {
       return TRUE;
     }
   }
 
   if (keyval == GDK_KEY_Escape) {
-    if (state->canvas.cancel_crop) {
-      state->canvas.cancel_crop();
+    if (
+        state->canvas.cancel_crop &&
+        state->canvas.cancel_crop()) {
       return TRUE;
     }
   }
@@ -178,7 +180,8 @@ gboolean workspace_key_pressed(
 GtkWidget* create_workspace(
     const patchy::Document& document,
     Tool current_tool,
-    ToolSelectedCallback tool_selected) {
+    ToolSelectedCallback tool_selected,
+    const CanvasPreview* prepared) {
   auto& mutable_document =
       const_cast<patchy::Document&>(
           document);
@@ -186,7 +189,8 @@ GtkWidget* create_workspace(
   CanvasView canvas =
       create_canvas_view(
           mutable_document,
-          current_tool);
+          current_tool,
+          prepared);
 
   ToolOptionsBar options =
       create_tool_options_bar(
@@ -359,12 +363,41 @@ GtkWidget* create_workspace(
       GTK_SCROLLED_WINDOW(inspector_scroll),
       inspector);
 
+  auto* dirty = g_new(gboolean, 1);
+  *dirty = FALSE;
+  g_object_set_data_full(
+      G_OBJECT(root),
+      "lienzo-dirty",
+      dirty,
+      g_free);
+
   if (canvas.set_document_changed_callback) {
     canvas.set_document_changed_callback(
-        [inspector] {
+        [inspector, dirty] {
+          *dirty = TRUE;
           refresh_inspector(
               inspector);
         });
+  }
+
+  if (canvas.set_composite_callback) {
+    canvas.set_composite_callback(
+        [inspector](
+            const std::uint8_t* rgba,
+            int width,
+            int height,
+            int stride) {
+          update_inspector_composite(
+              inspector,
+              rgba,
+              width,
+              height,
+              stride);
+        });
+  }
+
+  if (canvas.publish_composite) {
+    canvas.publish_composite();
   }
 
   gtk_paned_set_start_child(

@@ -29,53 +29,8 @@ namespace lienzo::gnome {
 
 void set_tool_cursor(
     CanvasState* state) {
-  const char* name =
-      "default";
-
-  switch (state->tool) {
-    case Tool::Move:
-      name = "move";
-      break;
-
-    case Tool::Hand:
-      name = "grab";
-      break;
-
-    case Tool::Zoom:
-      name = "zoom-in";
-      break;
-
-    case Tool::Text:
-      name = "text";
-      break;
-
-    case Tool::Marquee:
-    case Tool::EllipticalMarquee:
-    case Tool::Lasso:
-    case Tool::MagneticLasso:
-    case Tool::MagicWand:
-    case Tool::QuickSelect:
-    case Tool::Brush:
-    case Tool::Eraser:
-    case Tool::Smudge:
-    case Tool::Gradient:
-    case Tool::Fill:
-    case Tool::Crop:
-    case Tool::Line:
-    case Tool::Rectangle:
-    case Tool::Ellipse:
-    case Tool::Circle:
-      name = "crosshair";
-      break;
-
-    case Tool::Eyedropper:
-      name = "none";
-      break;
-
-    default:
-      name = "default";
-      break;
-  }
+  // Cada herramienta dibuja su propio puntero encima del lienzo.
+  const char* name = "none";
 
   gtk_widget_set_cursor_from_name(
       GTK_WIDGET(state->area),
@@ -519,7 +474,11 @@ void drag_begin(
                         .brush_size,
                     state->edit_options
                         .brush_softness,
-                    state->brush_opacity},
+                    state->brush_opacity,
+                    state->edit_options
+                        .brush_roundness,
+                    state->edit_options
+                        .brush_angle_degrees},
                 [state](
                     int px,
                     int py) {
@@ -605,7 +564,8 @@ void drag_begin(
 
   if (
       shape_drag_tool(
-          state->tool)) {
+          state->tool) ||
+      state->tool == Tool::Gradient) {
     state->shape_preview_active =
         true;
 
@@ -849,7 +809,8 @@ void drag_update(
           state->tool == Tool::Eraser);
     } else if (
         shape_drag_tool(
-            state->tool)) {
+            state->tool) ||
+        state->tool == Tool::Gradient) {
       state->shape_preview_end_x =
           new_doc_x;
 
@@ -936,6 +897,26 @@ void drag_update(
             dirty);
       }
     }
+  }
+
+  if (
+      state->tool == Tool::Gradient &&
+      state->shape_preview_active) {
+    double doc_x = 0.0;
+    double doc_y = 0.0;
+
+    widget_to_document(
+        state,
+        x,
+        y,
+        &doc_x,
+        &doc_y);
+
+    state->shape_preview_end_x = doc_x;
+    state->shape_preview_end_y = doc_y;
+
+    gtk_widget_queue_draw(
+        GTK_WIDGET(state->area));
   }
 
   state->last_x = x;
@@ -1067,6 +1048,66 @@ void drag_end(
     return;
   }
 
+  if (state->tool == Tool::Gradient) {
+    double gradient_x0 = 0.0;
+    double gradient_y0 = 0.0;
+    double gradient_x1 = 0.0;
+    double gradient_y1 = 0.0;
+
+    widget_to_document(
+        state,
+        state->drag_start_x,
+        state->drag_start_y,
+        &gradient_x0,
+        &gradient_y0);
+
+    widget_to_document(
+        state,
+        end_x,
+        end_y,
+        &gradient_x1,
+        &gradient_y1);
+
+    state->shape_preview_active = false;
+
+    const auto gradient_layer =
+        editing_layer(state);
+
+    if (gradient_layer.has_value()) {
+      auto options = state->edit_options;
+      options.primary.a = 255;
+      options.secondary.a = 255;
+
+      patchy::GradientOptions gradient;
+      gradient.method = state->gradient_method;
+      gradient.opacity = state->gradient_opacity;
+      gradient.reverse = state->gradient_reverse;
+
+      const auto dirty =
+          patchy::draw_gradient(
+              *state->document,
+              *gradient_layer,
+              static_cast<int>(
+                  std::lround(gradient_x0)),
+              static_cast<int>(
+                  std::lround(gradient_y0)),
+              static_cast<int>(
+                  std::lround(gradient_x1)),
+              static_cast<int>(
+                  std::lround(gradient_y1)),
+              options,
+              gradient);
+
+      refresh_canvas(state, dirty);
+      notify_document_changed(state);
+    }
+
+    gtk_widget_queue_draw(
+        GTK_WIDGET(state->area));
+
+    return;
+  }
+
   double x0 = 0.0;
   double y0 = 0.0;
   double x1 = 0.0;
@@ -1181,31 +1222,6 @@ void drag_end(
 
   const auto layer =
       editing_layer(state);
-
-  if (state->tool == Tool::Gradient) {
-    if (layer.has_value()) {
-      const auto dirty =
-          patchy::draw_linear_gradient(
-              *state->document,
-              *layer,
-              static_cast<int>(
-                  std::lround(x0)),
-              static_cast<int>(
-                  std::lround(y0)),
-              static_cast<int>(
-                  std::lround(x1)),
-              static_cast<int>(
-                  std::lround(y1)),
-              state->edit_options);
-
-      refresh_canvas(
-          state,
-          dirty);
-      notify_document_changed(state);
-    }
-
-    return;
-  }
 
   // Circle uses a square drag box.
   if (state->tool == Tool::Circle) {
@@ -1556,8 +1572,8 @@ void click_pressed(
             std::lround(document_x)),
         static_cast<int>(
             std::lround(document_y)),
-        32,
-        true,
+        state->wand_tolerance,
+        state->wand_contiguous,
         selection_combine_from_modifiers(
             modifiers));
 

@@ -48,6 +48,11 @@ struct CanvasState {
   int composite_height{0};
   int composite_stride{0};
 
+  // 1 when the cache is one pixel per document pixel. Large documents keep a
+  // smaller preview so Cairo is not asked for a surface the size of the file.
+  double composite_scale_x{1.0};
+  double composite_scale_y{1.0};
+
   struct MovePreviewState {
     bool active{false};
     bool fast_surface{false};
@@ -157,6 +162,15 @@ struct CanvasState {
   int smoothing{20};
   bool airbrush{false};
 
+  patchy::GradientMethod gradient_method{
+      patchy::GradientMethod::Linear};
+  float gradient_opacity{1.0F};
+  bool gradient_reverse{false};
+  int wand_tolerance{32};
+  bool wand_contiguous{true};
+  patchy::LocalAdjustmentSettings local_adjustment{};
+  int healing_diffusion{5};
+
   bool pointer_down{false};
   double pointer_document_x{0.0};
   double pointer_document_y{0.0};
@@ -175,6 +189,13 @@ struct CanvasState {
 
   std::function<void()>
       document_changed_callback;
+
+  std::shared_ptr<std::function<void(
+      const std::uint8_t*,
+      int,
+      int,
+      int)>>
+      composite_slot;
 
   std::vector<patchy::Document>
       undo_stack;
@@ -312,6 +333,13 @@ void write_composite_region(
     const std::vector<std::uint8_t>& alpha,
     patchy::Rect region);
 
+void upload_canvas_preview(
+    CanvasState* state,
+    const CanvasPreview& preview);
+
+void publish_canvas_composite(
+    CanvasState* state);
+
 void rebuild_canvas_cache(
     CanvasState* state);
 
@@ -404,6 +432,13 @@ bool document_position(
     double* x,
     double* y);
 
+void widget_to_document(
+    CanvasState* state,
+    double widget_x,
+    double widget_y,
+    double* x,
+    double* y);
+
 void draw_checkerboard(
     cairo_t* cr,
     double x,
@@ -475,6 +510,10 @@ void draw_brush_cursor_overlay(
     CanvasState* state,
     cairo_t* cr);
 
+void draw_tool_pointer_overlay(
+    CanvasState* state,
+    cairo_t* cr);
+
 void draw_crop_overlay(
     CanvasState* state,
     cairo_t* cr);
@@ -536,7 +575,7 @@ void motion_left(
 bool commit_crop(
     CanvasState* state);
 
-void cancel_crop(
+bool cancel_crop(
     CanvasState* state);
 
 gboolean key_pressed(

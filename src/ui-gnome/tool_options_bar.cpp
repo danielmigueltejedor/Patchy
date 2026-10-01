@@ -39,6 +39,24 @@ struct State {
   GtkCheckButton* shape_fill{};
   GtkDropDown* tip{};
   GtkWidget* tip_options{};
+
+  GtkWidget* gradient_options{};
+  GtkWidget* fill_options{};
+  GtkWidget* wand_options{};
+  GtkWidget* tone_options{};
+  GtkWidget* sponge_mode_box{};
+  GtkWidget* diffusion_box{};
+  GtkDropDown* gradient_method{};
+  GtkSpinButton* gradient_opacity{};
+  GtkCheckButton* gradient_reverse{};
+  GtkSpinButton* fill_tolerance{};
+  GtkCheckButton* fill_contiguous{};
+  GtkSpinButton* wand_tolerance{};
+  GtkCheckButton* wand_contiguous{};
+  GtkDropDown* tone_range{};
+  GtkCheckButton* protect_tones{};
+  GtkDropDown* sponge_mode{};
+  GtkSpinButton* healing_diffusion{};
 };
 
 GtkWidget* label(
@@ -579,6 +597,155 @@ void cancel_crop_clicked(
 
   if (state->canvas.cancel_crop) {
     state->canvas.cancel_crop();
+  }
+}
+
+void gradient_method_changed(
+    GtkDropDown* dropdown,
+    GParamSpec*,
+    gpointer data) {
+  auto* state = static_cast<State*>(data);
+
+  if (!state->canvas.set_gradient_method) {
+    return;
+  }
+
+  const guint selected =
+      gtk_drop_down_get_selected(dropdown);
+
+  state->canvas.set_gradient_method(
+      selected == 1
+          ? patchy::GradientMethod::Radial
+          : patchy::GradientMethod::Linear);
+}
+
+void gradient_opacity_changed(
+    GtkSpinButton* spin,
+    gpointer data) {
+  auto* state = static_cast<State*>(data);
+
+  if (state->canvas.set_gradient_opacity) {
+    state->canvas.set_gradient_opacity(
+        static_cast<int>(
+            gtk_spin_button_get_value(spin)));
+  }
+}
+
+void gradient_reverse_changed(
+    GtkCheckButton* toggle,
+    gpointer data) {
+  auto* state = static_cast<State*>(data);
+
+  if (state->canvas.set_gradient_reverse) {
+    state->canvas.set_gradient_reverse(
+        gtk_check_button_get_active(toggle));
+  }
+}
+
+void fill_tolerance_changed(
+    GtkSpinButton* spin,
+    gpointer data) {
+  auto* state = static_cast<State*>(data);
+
+  if (state->canvas.set_flood_tolerance) {
+    state->canvas.set_flood_tolerance(
+        static_cast<int>(
+            gtk_spin_button_get_value(spin)));
+  }
+}
+
+void fill_contiguous_changed(
+    GtkCheckButton* toggle,
+    gpointer data) {
+  auto* state = static_cast<State*>(data);
+
+  if (state->canvas.set_flood_contiguous) {
+    state->canvas.set_flood_contiguous(
+        gtk_check_button_get_active(toggle));
+  }
+}
+
+void wand_tolerance_changed(
+    GtkSpinButton* spin,
+    gpointer data) {
+  auto* state = static_cast<State*>(data);
+
+  if (state->canvas.set_wand_tolerance) {
+    state->canvas.set_wand_tolerance(
+        static_cast<int>(
+            gtk_spin_button_get_value(spin)));
+  }
+}
+
+void wand_contiguous_changed(
+    GtkCheckButton* toggle,
+    gpointer data) {
+  auto* state = static_cast<State*>(data);
+
+  if (state->canvas.set_wand_contiguous) {
+    state->canvas.set_wand_contiguous(
+        gtk_check_button_get_active(toggle));
+  }
+}
+
+void tone_range_changed(
+    GtkDropDown* dropdown,
+    GParamSpec*,
+    gpointer data) {
+  auto* state = static_cast<State*>(data);
+
+  if (!state->canvas.set_tone_range) {
+    return;
+  }
+
+  const guint selected =
+      gtk_drop_down_get_selected(dropdown);
+  const auto range =
+      selected == 0
+          ? patchy::LocalToneRange::Shadows
+          : selected == 2
+              ? patchy::LocalToneRange::Highlights
+              : patchy::LocalToneRange::Midtones;
+
+  state->canvas.set_tone_range(range);
+}
+
+void protect_tones_changed(
+    GtkCheckButton* toggle,
+    gpointer data) {
+  auto* state = static_cast<State*>(data);
+
+  if (state->canvas.set_protect_tones) {
+    state->canvas.set_protect_tones(
+        gtk_check_button_get_active(toggle));
+  }
+}
+
+void sponge_mode_changed(
+    GtkDropDown* dropdown,
+    GParamSpec*,
+    gpointer data) {
+  auto* state = static_cast<State*>(data);
+
+  if (!state->canvas.set_sponge_mode) {
+    return;
+  }
+
+  state->canvas.set_sponge_mode(
+      gtk_drop_down_get_selected(dropdown) == 0
+          ? patchy::SpongeMode::Saturate
+          : patchy::SpongeMode::Desaturate);
+}
+
+void healing_diffusion_changed(
+    GtkSpinButton* spin,
+    gpointer data) {
+  auto* state = static_cast<State*>(data);
+
+  if (state->canvas.set_healing_diffusion) {
+    state->canvas.set_healing_diffusion(
+        static_cast<int>(
+            gtk_spin_button_get_value(spin)));
   }
 }
 
@@ -1395,6 +1562,158 @@ ToolOptionsBar create_tool_options_bar(
         delete static_cast<State*>(data);
       });
 
+  auto add_named_dropdown =
+      [](GtkWidget* parent, const char* caption, const char* const* items) {
+        gtk_box_append(GTK_BOX(parent), label(caption));
+        GtkWidget* dropdown = gtk_drop_down_new_from_strings(items);
+        gtk_box_append(GTK_BOX(parent), dropdown);
+        return GTK_DROP_DOWN(dropdown);
+      };
+
+  GtkWidget* gradient =
+      gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+  state->gradient_options = gradient;
+  const char* gradient_methods[] = {"Lineal", "Radial", nullptr};
+  state->gradient_method =
+      add_named_dropdown(gradient, "Degradado", gradient_methods);
+  gtk_box_append(GTK_BOX(gradient), label("Opacidad"));
+  state->gradient_opacity =
+      GTK_SPIN_BUTTON(spin(1, 100, 100));
+  gtk_box_append(
+      GTK_BOX(gradient),
+      GTK_WIDGET(state->gradient_opacity));
+  state->gradient_reverse =
+      GTK_CHECK_BUTTON(
+          gtk_check_button_new_with_label("Invertir"));
+  gtk_box_append(
+      GTK_BOX(gradient),
+      GTK_WIDGET(state->gradient_reverse));
+  gtk_box_append(GTK_BOX(root), gradient);
+  gtk_widget_set_visible(gradient, FALSE);
+  g_signal_connect(
+      state->gradient_method,
+      "notify::selected",
+      G_CALLBACK(gradient_method_changed),
+      state);
+  g_signal_connect(
+      state->gradient_opacity,
+      "value-changed",
+      G_CALLBACK(gradient_opacity_changed),
+      state);
+  g_signal_connect(
+      state->gradient_reverse,
+      "toggled",
+      G_CALLBACK(gradient_reverse_changed),
+      state);
+
+  GtkWidget* fill =
+      gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+  state->fill_options = fill;
+  gtk_box_append(GTK_BOX(fill), label("Tolerancia"));
+  state->fill_tolerance = GTK_SPIN_BUTTON(spin(0, 255, 0));
+  gtk_box_append(GTK_BOX(fill), GTK_WIDGET(state->fill_tolerance));
+  state->fill_contiguous =
+      GTK_CHECK_BUTTON(
+          gtk_check_button_new_with_label("Contiguo"));
+  gtk_check_button_set_active(state->fill_contiguous, TRUE);
+  gtk_box_append(GTK_BOX(fill), GTK_WIDGET(state->fill_contiguous));
+  gtk_box_append(GTK_BOX(root), fill);
+  gtk_widget_set_visible(fill, FALSE);
+  g_signal_connect(
+      state->fill_tolerance,
+      "value-changed",
+      G_CALLBACK(fill_tolerance_changed),
+      state);
+  g_signal_connect(
+      state->fill_contiguous,
+      "toggled",
+      G_CALLBACK(fill_contiguous_changed),
+      state);
+
+  GtkWidget* wand =
+      gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+  state->wand_options = wand;
+  gtk_box_append(GTK_BOX(wand), label("Tolerancia"));
+  state->wand_tolerance = GTK_SPIN_BUTTON(spin(0, 255, 32));
+  gtk_box_append(GTK_BOX(wand), GTK_WIDGET(state->wand_tolerance));
+  state->wand_contiguous =
+      GTK_CHECK_BUTTON(
+          gtk_check_button_new_with_label("Contiguo"));
+  gtk_check_button_set_active(state->wand_contiguous, TRUE);
+  gtk_box_append(GTK_BOX(wand), GTK_WIDGET(state->wand_contiguous));
+  gtk_box_append(GTK_BOX(root), wand);
+  gtk_widget_set_visible(wand, FALSE);
+  g_signal_connect(
+      state->wand_tolerance,
+      "value-changed",
+      G_CALLBACK(wand_tolerance_changed),
+      state);
+  g_signal_connect(
+      state->wand_contiguous,
+      "toggled",
+      G_CALLBACK(wand_contiguous_changed),
+      state);
+
+  GtkWidget* tone =
+      gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+  state->tone_options = tone;
+  const char* tone_ranges[] = {
+      "Sombras",
+      "Medios tonos",
+      "Altas luces",
+      nullptr};
+  state->tone_range =
+      add_named_dropdown(tone, "Rango", tone_ranges);
+  gtk_drop_down_set_selected(state->tone_range, 1);
+  state->protect_tones =
+      GTK_CHECK_BUTTON(
+          gtk_check_button_new_with_label("Proteger tonos"));
+  gtk_check_button_set_active(state->protect_tones, TRUE);
+  gtk_box_append(GTK_BOX(tone), GTK_WIDGET(state->protect_tones));
+  gtk_box_append(GTK_BOX(root), tone);
+  gtk_widget_set_visible(tone, FALSE);
+  g_signal_connect(
+      state->tone_range,
+      "notify::selected",
+      G_CALLBACK(tone_range_changed),
+      state);
+  g_signal_connect(
+      state->protect_tones,
+      "toggled",
+      G_CALLBACK(protect_tones_changed),
+      state);
+
+  GtkWidget* sponge =
+      gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+  state->sponge_mode_box = sponge;
+  const char* sponge_modes[] = {"Saturar", "Desaturar", nullptr};
+  state->sponge_mode =
+      add_named_dropdown(sponge, "Esponja", sponge_modes);
+  gtk_drop_down_set_selected(state->sponge_mode, 1);
+  gtk_box_append(GTK_BOX(root), sponge);
+  gtk_widget_set_visible(sponge, FALSE);
+  g_signal_connect(
+      state->sponge_mode,
+      "notify::selected",
+      G_CALLBACK(sponge_mode_changed),
+      state);
+
+  GtkWidget* diffusion =
+      gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+  state->diffusion_box = diffusion;
+  gtk_box_append(GTK_BOX(diffusion), label("Difusión"));
+  state->healing_diffusion = GTK_SPIN_BUTTON(spin(1, 7, 5));
+  gtk_box_append(
+      GTK_BOX(diffusion),
+      GTK_WIDGET(state->healing_diffusion));
+  gtk_box_append(GTK_BOX(root), diffusion);
+  gtk_widget_set_visible(diffusion, FALSE);
+  g_signal_connect(
+      state->healing_diffusion,
+      "value-changed",
+      G_CALLBACK(healing_diffusion_changed),
+      state);
+
   ToolOptionsBar result;
 
   result.widget = root;
@@ -1448,6 +1767,20 @@ ToolOptionsBar create_tool_options_bar(
         const bool zoom =
             tool == Tool::Zoom;
 
+        const bool gradient =
+            tool == Tool::Gradient;
+
+        const bool fill =
+            tool == Tool::Fill;
+
+        const bool wand =
+            tool == Tool::MagicWand;
+
+        const bool tone =
+            tool == Tool::Dodge ||
+            tool == Tool::Burn ||
+            tool == Tool::Sponge;
+
         gtk_widget_set_visible(
             state->paint_options,
             paint);
@@ -1482,12 +1815,39 @@ ToolOptionsBar create_tool_options_bar(
             zoom);
 
         gtk_widget_set_visible(
+            state->gradient_options,
+            gradient);
+
+        gtk_widget_set_visible(
+            state->fill_options,
+            fill);
+
+        gtk_widget_set_visible(
+            state->wand_options,
+            wand);
+
+        gtk_widget_set_visible(
+            state->tone_options,
+            tone);
+
+        gtk_widget_set_visible(
+            state->sponge_mode_box,
+            tool == Tool::Sponge);
+
+        gtk_widget_set_visible(
+            state->diffusion_box,
+            tool == Tool::Healing);
+
+        gtk_widget_set_visible(
             state->root,
             paint ||
             crop ||
             text ||
             pen ||
-            zoom);
+            zoom ||
+            gradient ||
+            fill ||
+            wand);
       };
 
   result.set_tool(

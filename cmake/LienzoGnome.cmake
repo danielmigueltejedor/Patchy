@@ -37,6 +37,8 @@ if(UNIX AND NOT APPLE AND NOT EMSCRIPTEN)
         src/ui-gnome/main_window.cpp
         src/ui-gnome/primary_menu.cpp
         src/ui-gnome/new_document_dialog.cpp
+        src/ui-gnome/export_dialog.cpp
+        src/ui-gnome/file_portal.cpp
         src/ui-gnome/tool_palette.cpp
         src/ui-gnome/workspace.cpp
         src/ui-gnome/canvas.cpp
@@ -55,6 +57,8 @@ if(UNIX AND NOT APPLE AND NOT EMSCRIPTEN)
         src/ui-gnome/brush_tips.cpp
         src/ui-gnome/tool_options_bar.cpp
         src/ui-gnome/inspector.cpp
+        src/ui-gnome/layer_style_dialog.cpp
+        src/ui-gnome/adjustment_dialog.cpp
         src/ui-gnome/layer_thumbnail.cpp
         src/ui-gnome/preferences_dialog.cpp
       )

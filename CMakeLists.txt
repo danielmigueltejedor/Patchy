@@ -127,6 +127,7 @@ add_library(patchy_core
   src/core/pixel_tools.cpp
   src/core/quick_select.cpp
   src/core/rect_utils.cpp
+  src/core/retouch_brush.cpp
   src/core/smart_filter_effects.cpp
   src/core/smart_object.cpp
   src/core/spot_heal.cpp
@@ -479,6 +480,7 @@ add_library(patchy_formats
   src/formats/jxr_document_io.cpp
   src/formats/palette_io.cpp
   src/formats/pcx_document_io.cpp
+  src/formats/pxd_document_io.cpp
   src/formats/pdf_content.cpp
   src/formats/pdf_crypt.cpp
   src/formats/pdf_document_io.cpp
@@ -508,6 +510,29 @@ add_library(patchy_formats
 # PRIVATE too: af_document_io.cpp bakes Gaussian-blur layer effects through the calibrated
 # smart-filter blur (filters depends only on core, so no cycle).
 target_link_libraries(patchy_formats PUBLIC patchy_core patchy_render patchy_psd PRIVATE patchy_filters patchy_libraw)
+# Pixelmator Pro .pxd stores its layer tree in a SQLite database (metadata.info).
+# The reader and writer compile everywhere and throw if this build has no sqlite3.
+if(PkgConfig_FOUND)
+  pkg_check_modules(PATCHY_SQLITE3 QUIET IMPORTED_TARGET sqlite3)
+endif()
+if(NOT PkgConfig_FOUND)
+  find_package(PkgConfig QUIET)
+  if(PkgConfig_FOUND)
+    pkg_check_modules(PATCHY_SQLITE3 QUIET IMPORTED_TARGET sqlite3)
+  endif()
+endif()
+if(TARGET PkgConfig::PATCHY_SQLITE3)
+  target_compile_definitions(patchy_formats PRIVATE PATCHY_HAS_SQLITE=1)
+  target_link_libraries(patchy_formats PRIVATE PkgConfig::PATCHY_SQLITE3)
+  # Pixelmator Pro 4.4 stores each raster layer as HEIC. System libheif supplies the
+  # HEVC codec; this target does not vendor one. Without it, the same slot is PNG.
+  pkg_check_modules(PATCHY_LIBHEIF QUIET IMPORTED_TARGET libheif)
+  if(TARGET PkgConfig::PATCHY_LIBHEIF)
+    target_compile_definitions(patchy_formats PRIVATE PATCHY_HAS_LIBHEIF=1)
+    target_link_libraries(patchy_formats PRIVATE PkgConfig::PATCHY_LIBHEIF)
+  endif()
+endif()
+target_link_libraries(patchy_formats PRIVATE patchy_lcms2)
 if(EMSCRIPTEN AND PATCHY_BUILD_APP)
   target_sources(patchy_formats PRIVATE src/formats/heif_document_io_wasm.cpp)
   target_compile_definitions(patchy_formats PRIVATE PATCHY_HEIF_WEBCODECS=1)
@@ -1673,6 +1698,7 @@ if(PATCHY_BUILD_TESTS)
     tests/core/psd_writer_stability_tests.cpp
     tests/core/jxr_tests.cpp
     tests/core/rttex_tests.cpp
+    tests/core/pxd_tests.cpp
     tests/core/raw_heif_tests.cpp
     tests/core/smart_filter_descriptors_tests.cpp
     tests/core/smart_filter_descriptors_tests_canonical.cpp

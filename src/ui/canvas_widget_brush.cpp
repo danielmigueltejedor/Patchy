@@ -17,6 +17,7 @@
 #include "core/layer_render_utils.hpp"
 #include "core/layer_tree.hpp"
 #include "core/pixel_tools.hpp"
+#include "core/retouch_brush.hpp"
 #include "core/quick_select.hpp"
 #include "ui/edit_conversions.hpp"
 #include "ui/image_document_io.hpp"
@@ -1258,20 +1259,7 @@ QRect CanvasWidget::draw_brush_segment_with_dabs(QPointF from, QPointF to, bool 
 }
 
 float CanvasWidget::capped_stroke_coverage(std::int32_t x, std::int32_t y, float coverage, float source_alpha) {
-  source_alpha = std::clamp(source_alpha, 1.0F / 255.0F, 1.0F);
-  const auto target_alpha = std::clamp(source_alpha * std::clamp(coverage, 0.0F, 1.0F), 0.0F, 1.0F);
-  if (target_alpha <= 0.0F) {
-    return 0.0F;
-  }
-
-  auto& previous_alpha = brush_stroke_alpha_caps_[stroke_pixel_key(x, y)];
-  if (target_alpha <= previous_alpha + 0.0005F) {
-    return 0.0F;
-  }
-
-  const auto incremental_alpha = (target_alpha - previous_alpha) / std::max(0.0005F, 1.0F - previous_alpha);
-  previous_alpha = target_alpha;
-  return std::clamp(incremental_alpha / source_alpha, 0.0F, 1.0F);
+  return patchy::capped_stroke_coverage(brush_stroke_alpha_caps_, x, y, coverage, source_alpha);
 }
 
 float CanvasWidget::accumulating_stroke_coverage(std::int32_t x, std::int32_t y,
@@ -2165,186 +2153,76 @@ QRect CanvasWidget::local_adjustment_brush_segment(QPoint from, QPoint to) {
   }
 
   const auto brush = effective_brush_input();
-  const auto radius = std::max(1, brush.size) / 2;
-  const auto layer_rect = to_qrect(snapshot.bounds);
-  const auto document_rect = QRect(0, 0, document_->width(), document_->height());
-  auto stroke_rect = QRect(std::min(from.x(), to.x()) - radius,
-                           std::min(from.y(), to.y()) - radius,
-                           std::abs(to.x() - from.x()) + radius * 2 + 1,
-                           std::abs(to.y() - from.y()) + radius * 2 + 1)
-                         .intersected(document_rect)
-                         .intersected(layer_rect);
-  if (stroke_rect.isEmpty()) {
-    return {};
+  EditOptions options;
+  options.brush_size = brush.size;
+  options.brush_softness = brush.softness;
+  options.brush_roundness = brush.roundness;
+  options.brush_angle_degrees = brush.angle_degrees;
+  options.lock_transparent_pixels = active_layer_locks_transparent_pixels();
+  options.palette_snap = palette_snap_for_edits();
+  options.progress_callback = [this] { tick_processing_operation(); };
+
+  LocalAdjustment adjustment = LocalAdjustment::Blur;
+  switch (tool_) {
+    case CanvasTool::BlurBrush:
+      adjustment = LocalAdjustment::Blur;
+      break;
+    case CanvasTool::SharpenBrush:
+      adjustment = LocalAdjustment::Sharpen;
+      break;
+    case CanvasTool::Dodge:
+      adjustment = LocalAdjustment::Dodge;
+      break;
+    case CanvasTool::Burn:
+      adjustment = LocalAdjustment::Burn;
+      break;
+    case CanvasTool::Sponge:
+      adjustment = LocalAdjustment::Sponge;
+      break;
+    default:
+      return {};
   }
 
-  const auto source_pixel = [&](int document_x, int document_y) {
-    const auto x = std::clamp(document_x, layer_rect.left(), layer_rect.right()) - snapshot.bounds.x;
-    const auto y = std::clamp(document_y, layer_rect.top(), layer_rect.bottom()) - snapshot.bounds.y;
-    const auto* pixel = source_pixels.pixel(x, y);
-    return std::array<std::uint8_t, 4>{pixel[0], pixel[1], pixel[2],
-                                       channels >= 4 ? pixel[3] : std::uint8_t{255}};
-  };
+  LocalAdjustmentSettings settings;
+  switch (local_tone_range_) {
+    case LocalToneRange::Shadows:
+      settings.tone_range = patchy::LocalToneRange::Shadows;
+      break;
+    case LocalToneRange::Midtones:
+      settings.tone_range = patchy::LocalToneRange::Midtones;
+      break;
+    case LocalToneRange::Highlights:
+      settings.tone_range = patchy::LocalToneRange::Highlights;
+      break;
+  }
+  settings.protect_tones = local_protect_tones_;
+  settings.sponge_mode =
+      sponge_mode_ == SpongeMode::Saturate ? patchy::SpongeMode::Saturate : patchy::SpongeMode::Desaturate;
+  settings.sponge_vibrance = sponge_vibrance_;
 
-  // Patent boundary (July 2026): these are deliberately fixed local operations.
-  // Do not add edge ranking, patch matching, deconvolution, automatic boundary
-  // isolation, or stroke-start color classification here. US 7724980, US 8687913,
-  // US 9142009, and the abandoned US 2007/0188510 all cover variants of those
-  // adaptive techniques. The brush footprint alone chooses which pixels change.
-  const auto adjusted_source_pixel = [&](QPoint point) {
-    const auto center = source_pixel(point.x(), point.y());
-    std::array<std::uint8_t, 3> result{center[0], center[1], center[2]};
+  RgbaPlane plane;
+  plane.data = source_pixels.data().data();
+  plane.origin_x = snapshot.bounds.x;
+  plane.origin_y = snapshot.bounds.y;
+  plane.width = source_pixels.width();
+  plane.height = source_pixels.height();
+  plane.stride_bytes = static_cast<std::int32_t>(source_pixels.stride_bytes());
+  plane.channels = channels;
 
-    if (tool_ == CanvasTool::BlurBrush || tool_ == CanvasTool::SharpenBrush) {
-      constexpr std::array<int, 3> kGaussian{1, 2, 1};
-      std::array<double, 3> premultiplied{};
-      double alpha_weight = 0.0;
-      for (int offset_y = -1; offset_y <= 1; ++offset_y) {
-        for (int offset_x = -1; offset_x <= 1; ++offset_x) {
-          const auto sample = source_pixel(point.x() + offset_x, point.y() + offset_y);
-          const auto weight = static_cast<double>(kGaussian[static_cast<std::size_t>(offset_x + 1)] *
-                                                  kGaussian[static_cast<std::size_t>(offset_y + 1)]);
-          const auto alpha = static_cast<double>(sample[3]) / 255.0;
-          alpha_weight += weight * alpha;
-          for (std::size_t channel = 0; channel < premultiplied.size(); ++channel) {
-            premultiplied[channel] += weight * alpha * static_cast<double>(sample[channel]);
-          }
-        }
-      }
-      if (alpha_weight <= std::numeric_limits<double>::epsilon()) {
-        return result;
-      }
-      for (std::size_t channel = 0; channel < result.size(); ++channel) {
-        const auto blurred = premultiplied[channel] / alpha_weight;
-        result[channel] = tool_ == CanvasTool::BlurBrush
-                              ? clamp_byte(static_cast<float>(blurred))
-                              : clamp_byte(static_cast<float>(static_cast<double>(center[channel]) * 2.0 - blurred));
-      }
-      return result;
-    }
-
-    const auto red = static_cast<double>(center[0]);
-    const auto green = static_cast<double>(center[1]);
-    const auto blue = static_cast<double>(center[2]);
-    const auto lightness = (54.0 * red + 183.0 * green + 19.0 * blue) / (256.0 * 255.0);
-    if (tool_ == CanvasTool::Dodge || tool_ == CanvasTool::Burn) {
-      double range_weight = 1.0;
-      switch (local_tone_range_) {
-        case LocalToneRange::Shadows:
-          range_weight = 1.0 - lightness;
-          break;
-        case LocalToneRange::Midtones:
-          range_weight = 1.0 - std::abs(lightness * 2.0 - 1.0);
-          break;
-        case LocalToneRange::Highlights:
-          range_weight = lightness;
-          break;
-      }
-      const auto source_lightness = lightness * 255.0;
-      const auto target_lightness = tool_ == CanvasTool::Dodge
-                                        ? source_lightness + (255.0 - source_lightness) * range_weight
-                                        : source_lightness * (1.0 - range_weight);
-      for (std::size_t channel = 0; channel < result.size(); ++channel) {
-        const auto value = static_cast<double>(center[channel]);
-        const auto adjusted = local_protect_tones_
-                                  ? value + (target_lightness - source_lightness)
-                                  : (tool_ == CanvasTool::Dodge
-                                         ? value + (255.0 - value) * range_weight
-                                         : value * (1.0 - range_weight));
-        result[channel] = clamp_byte(static_cast<float>(adjusted));
-      }
-      return result;
-    }
-
-    if (tool_ == CanvasTool::Sponge) {
-      const auto maximum = static_cast<double>(std::max({center[0], center[1], center[2]}));
-      const auto minimum = static_cast<double>(std::min({center[0], center[1], center[2]}));
-      const auto saturation = (maximum - minimum) / 255.0;
-      const auto vibrance_scale = sponge_vibrance_ ? 1.0 - saturation : 1.0;
-      const auto luma = lightness * 255.0;
-      const auto chroma_scale = sponge_mode_ == SpongeMode::Saturate ? 1.0 + vibrance_scale
-                                                                     : 1.0 - vibrance_scale;
-      for (std::size_t channel = 0; channel < result.size(); ++channel) {
-        result[channel] = clamp_byte(static_cast<float>(
-            luma + (static_cast<double>(center[channel]) - luma) * chroma_scale));
-      }
-    }
-    return result;
-  };
-
-  auto& pixels = layer->pixels();
-  const auto mutable_channels = pixels.format().channels;
   const auto strength = static_cast<float>(local_adjustment_strength_) / 100.0F;
-  const auto* palette_snap = palette_snap_for_edits();
-  QRect dirty;
-  const auto adjust_pixel = [&](QPoint point, float coverage) {
-    if (!stroke_rect.contains(point) || !selection_allows(point)) {
-      return;
-    }
-    if (has_selection()) {
-      coverage *= static_cast<float>(selection_alpha_at(point)) / 255.0F;
-    }
-    if (coverage <= 0.0F) {
-      return;
-    }
-    if (palette_snap != nullptr) {
-      if (coverage < palette_snap->coverage_threshold) {
-        return;
-      }
-      coverage = 1.0F;
-    }
-    coverage = capped_stroke_coverage(point.x(), point.y(), coverage, strength);
-    if (coverage <= 0.0F) {
-      return;
-    }
-
-    auto* destination = pixels.pixel(point.x() - snapshot.bounds.x, point.y() - snapshot.bounds.y);
-    if (mutable_channels >= 4 && destination[3] == 0) {
-      return;
-    }
-    const auto adjusted = adjusted_source_pixel(point);
-    const auto amount = strength * coverage;
-    const auto before = std::array<std::uint8_t, 4>{destination[0], destination[1], destination[2],
-                                                    mutable_channels >= 4 ? destination[3] : std::uint8_t{255}};
-    for (std::size_t channel = 0; channel < adjusted.size(); ++channel) {
-      destination[channel] = clamp_byte(static_cast<float>(adjusted[channel]) * amount +
-                                        static_cast<float>(destination[channel]) * (1.0F - amount));
-    }
-    if (palette_snap != nullptr) {
-      patchy::snap_pixel_to_palette(destination, mutable_channels, *palette_snap);
-    }
-    if (destination[0] != before[0] || destination[1] != before[1] || destination[2] != before[2]) {
-      dirty = dirty.united(QRect(point, QSize(1, 1)));
-    }
-  };
-
-  if (radius == 0) {
-    visit_pixel_line(from, to, [&](QPoint point) { adjust_pixel(point, 1.0F); });
-    return dirty;
-  }
-
-  const auto dx = static_cast<double>(to.x() - from.x());
-  const auto dy = static_cast<double>(to.y() - from.y());
-  const auto segment_length_squared = dx * dx + dy * dy;
-  for (int y = stroke_rect.top(); y <= stroke_rect.bottom(); ++y) {
-    for (int x = stroke_rect.left(); x <= stroke_rect.right(); ++x) {
-      const auto along = segment_length_squared <= std::numeric_limits<double>::epsilon()
-                             ? 0.0
-                             : std::clamp((static_cast<double>(x - from.x()) * dx +
-                                           static_cast<double>(y - from.y()) * dy) /
-                                              segment_length_squared,
-                                          0.0, 1.0);
-      const auto closest_x = static_cast<double>(from.x()) + dx * along;
-      const auto closest_y = static_cast<double>(from.y()) + dy * along;
-      const auto coverage = brush_shape_coverage(static_cast<double>(x) - closest_x,
-                                                 static_cast<double>(y) - closest_y,
-                                                 radius, brush.softness, brush.roundness,
-                                                 brush.angle_degrees);
-      adjust_pixel(QPoint(x, y), coverage);
-    }
-    tick_processing_operation();
-  }
-  return dirty;
+  const auto dirty = patchy::local_adjustment_brush_segment(
+      *document_, layer_id, from.x(), from.y(), to.x(), to.y(), options, plane, adjustment, settings, strength,
+      &brush_stroke_alpha_caps_, [this](std::int32_t x, std::int32_t y) {
+        const QPoint point(x, y);
+        if (!selection_allows(point)) {
+          return 0.0F;
+        }
+        if (!has_selection()) {
+          return 1.0F;
+        }
+        return static_cast<float>(selection_alpha_at(point)) / 255.0F;
+      });
+  return to_qrect(dirty);
 }
 
 void CanvasWidget::set_clone_source(QPoint point) {
@@ -2381,209 +2259,51 @@ QRect CanvasWidget::clone_brush_at(QPoint point) {
 QRect CanvasWidget::clone_brush_segment(QPoint from, QPoint to) {
   auto* layer = active_pixel_layer();
   if (document_ == nullptr || layer == nullptr || clone_source_cache_.isNull() ||
-      layer->pixels().format().bit_depth != BitDepth::UInt8 || layer->pixels().format().channels < 3) {
+      !document_->active_layer_id().has_value()) {
     return {};
   }
-  const auto* palette_snap = palette_snap_for_edits();
+  const auto& source_pixels = std::as_const(*layer).pixels();
+  if (source_pixels.format().bit_depth != BitDepth::UInt8 || source_pixels.format().channels < 3) {
+    return {};
+  }
 
   const auto brush = effective_brush_input();
-  const auto healing = tool_ == CanvasTool::Healing;
-  const auto healing_tone_radius =
-      std::max(1, (brush.size * (9 - std::clamp(healing_diffusion_, 1, 7)) + 15) / 16);
-  const auto radius = std::max(1, brush.size) / 2;
-  if (radius == 0) {
-    const auto path_rect = QRect(std::min(from.x(), to.x()),
-                                 std::min(from.y(), to.y()),
-                                 std::abs(to.x() - from.x()) + 1,
-                                 std::abs(to.y() - from.y()) + 1)
-                               .intersected(QRect(0, 0, document_->width(), document_->height()));
-    if (path_rect.isEmpty()) {
-      return {};
-    }
+  EditOptions options;
+  options.brush_size = brush.size;
+  options.brush_softness = brush.softness;
+  options.brush_roundness = brush.roundness;
+  options.brush_angle_degrees = brush.angle_degrees;
+  options.lock_transparent_pixels = active_layer_locks_transparent_pixels();
+  options.palette_snap = palette_snap_for_edits();
+  options.progress_callback = [this] { tick_processing_operation(); };
 
-    const auto lock_transparent_pixels = active_layer_locks_transparent_pixels();
-    if (!lock_transparent_pixels) {
-      patchy::expand_layer_to_include_rect(*layer, to_core_rect(path_rect));
-    }
+  RgbaPlane plane;
+  plane.data = clone_source_cache_.constBits();
+  plane.width = clone_source_cache_.width();
+  plane.height = clone_source_cache_.height();
+  plane.stride_bytes = static_cast<std::int32_t>(clone_source_cache_.bytesPerLine());
+  plane.channels = 4;
 
-    auto& pixels = layer->pixels();
-    const auto bounds = layer->bounds();
-    const auto channels = pixels.format().channels;
-    const auto opacity = static_cast<float>(brush.opacity) / 100.0F;
-    QRect dirty;
-    visit_pixel_line(from, to, [&](QPoint document_point) {
-      if (!QRect(0, 0, document_->width(), document_->height()).contains(document_point) ||
-          !to_qrect(bounds).contains(document_point) || !selection_allows(document_point)) {
-        return;
-      }
-      auto coverage = has_selection() ? static_cast<float>(selection_alpha_at(document_point)) / 255.0F : 1.0F;
-      if (coverage <= 0.0F) {
-        return;
-      }
-      if (palette_snap != nullptr) {
-        if (coverage < palette_snap->coverage_threshold) {
-          return;
-        }
-        coverage = 1.0F;
-      }
-      const auto source_point = document_point + clone_source_offset_;
-      if (source_point.x() < 0 || source_point.y() < 0 || source_point.x() >= clone_source_cache_.width() ||
-          source_point.y() >= clone_source_cache_.height()) {
-        return;
-      }
+  CloneStampSettings stamp;
+  stamp.healing = tool_ == CanvasTool::Healing;
+  stamp.tone_radius = healing_tone_radius(brush.size, healing_diffusion_);
+  stamp.offset_x = clone_source_offset_.x();
+  stamp.offset_y = clone_source_offset_.y();
 
-      auto row = pixels.row(document_point.y() - bounds.y);
-      auto* dst = row.data() + static_cast<std::size_t>(document_point.x() - bounds.x) * channels;
-      if (lock_transparent_pixels && channels >= 4 && dst[3] == 0) {
-        return;
-      }
-      coverage = capped_stroke_coverage(document_point.x(), document_point.y(), coverage, opacity);
-      if (coverage <= 0.0F) {
-        return;
-      }
-
-      std::array<std::uint8_t, 4> healed{};
-      const auto* src = clone_source_cache_.constScanLine(source_point.y()) +
-                        static_cast<std::size_t>(source_point.x()) * 4U;
-      if (healing) {
-        healed = healing_sample(clone_source_cache_, source_point, document_point, healing_tone_radius);
-        src = healed.data();
-      }
-      const auto covered_opacity = opacity * coverage;
-      if (channels >= 4 && !lock_transparent_pixels) {
-        blend_straight_rgba(dst, src, covered_opacity);
-      } else {
-        const auto effective_opacity = covered_opacity * (static_cast<float>(src[3]) / 255.0F);
-        if (effective_opacity <= 0.0F) {
-          return;
-        }
-        dst[0] = clamp_byte(static_cast<float>(src[0]) * effective_opacity +
-                            static_cast<float>(dst[0]) * (1.0F - effective_opacity));
-        dst[1] = clamp_byte(static_cast<float>(src[1]) * effective_opacity +
-                            static_cast<float>(dst[1]) * (1.0F - effective_opacity));
-        dst[2] = clamp_byte(static_cast<float>(src[2]) * effective_opacity +
-                            static_cast<float>(dst[2]) * (1.0F - effective_opacity));
-      }
-      if (palette_snap != nullptr) {
-        patchy::snap_pixel_to_palette(dst, channels, *palette_snap);
-      }
-      dirty = dirty.united(QRect(document_point, QSize(1, 1)));
-    });
-    return dirty;
-  }
-
-  const auto left = std::min(from.x(), to.x()) - radius;
-  const auto top = std::min(from.y(), to.y()) - radius;
-  const auto right = std::max(from.x(), to.x()) + radius + 1;
-  const auto bottom = std::max(from.y(), to.y()) + radius + 1;
-  auto stroke_rect = QRect(left, top, right - left, bottom - top).intersected(
-      QRect(0, 0, document_->width(), document_->height()));
-  if (stroke_rect.isEmpty()) {
-    return {};
-  }
-
-  const auto lock_transparent_pixels = active_layer_locks_transparent_pixels();
-  if (!lock_transparent_pixels) {
-    patchy::expand_layer_to_include_rect(*layer, to_core_rect(stroke_rect));
-  }
-
-  auto& pixels = layer->pixels();
-  const auto bounds = layer->bounds();
-  const auto channels = pixels.format().channels;
-  stroke_rect = stroke_rect.intersected(to_qrect(bounds));
-  if (stroke_rect.isEmpty()) {
-    return {};
-  }
-
-  const auto dx = to.x() - from.x();
-  const auto dy = to.y() - from.y();
-  const auto segment_length_squared = static_cast<double>(dx) * static_cast<double>(dx) +
-                                      static_cast<double>(dy) * static_cast<double>(dy);
   const auto opacity = static_cast<float>(brush.opacity) / 100.0F;
-
-  QRect dirty;
-  for (int y = stroke_rect.top(); y <= stroke_rect.bottom(); ++y) {
-    auto row = pixels.row(y - bounds.y);
-    for (int x = stroke_rect.left(); x <= stroke_rect.right(); ++x) {
-      const auto along =
-          segment_length_squared <= 0.0
-              ? 0.0
-              : std::clamp((static_cast<double>(x - from.x()) * static_cast<double>(dx) +
-                            static_cast<double>(y - from.y()) * static_cast<double>(dy)) /
-                               segment_length_squared,
-                           0.0, 1.0);
-      const auto closest_x = static_cast<double>(from.x()) + static_cast<double>(dx) * along;
-      const auto closest_y = static_cast<double>(from.y()) + static_cast<double>(dy) * along;
-      const auto distance_x = static_cast<double>(x) - closest_x;
-      const auto distance_y = static_cast<double>(y) - closest_y;
-      auto coverage = brush_shape_coverage(distance_x, distance_y, radius, brush.softness, brush.roundness,
-                                           brush.angle_degrees);
-      if (coverage <= 0.0F) {
-        continue;
-      }
-      const QPoint document_point(x, y);
-      if (!selection_allows(document_point)) {
-        continue;
-      }
-      if (has_selection()) {
-        coverage *= static_cast<float>(selection_alpha_at(document_point)) / 255.0F;
-        if (coverage <= 0.0F) {
-          continue;
+  const auto dirty = patchy::clone_stamp_brush_segment(
+      *document_, *document_->active_layer_id(), from.x(), from.y(), to.x(), to.y(), options, plane, stamp, opacity,
+      &brush_stroke_alpha_caps_, [this](std::int32_t x, std::int32_t y) {
+        const QPoint point(x, y);
+        if (!selection_allows(point)) {
+          return 0.0F;
         }
-      }
-      if (palette_snap != nullptr) {
-        if (coverage < palette_snap->coverage_threshold) {
-          continue;
+        if (!has_selection()) {
+          return 1.0F;
         }
-        coverage = 1.0F;
-      }
-
-      const auto source_point = document_point + clone_source_offset_;
-      if (source_point.x() < 0 || source_point.y() < 0 || source_point.x() >= clone_source_cache_.width() ||
-          source_point.y() >= clone_source_cache_.height()) {
-        continue;
-      }
-
-      const auto local_x = x - bounds.x;
-      auto* dst = row.data() + static_cast<std::size_t>(local_x) * channels;
-      if (lock_transparent_pixels && channels >= 4 && dst[3] == 0) {
-        continue;
-      }
-      coverage = capped_stroke_coverage(document_point.x(), document_point.y(), coverage, opacity);
-      if (coverage <= 0.0F) {
-        continue;
-      }
-
-      std::array<std::uint8_t, 4> healed{};
-      const auto* src = clone_source_cache_.constScanLine(source_point.y()) +
-                        static_cast<std::size_t>(source_point.x()) * 4U;
-      if (healing) {
-        healed = healing_sample(clone_source_cache_, source_point, document_point, healing_tone_radius);
-        src = healed.data();
-      }
-      const auto covered_opacity = opacity * coverage;
-      if (channels >= 4 && !lock_transparent_pixels) {
-        blend_straight_rgba(dst, src, covered_opacity);
-      } else {
-        const auto effective_opacity = covered_opacity * (static_cast<float>(src[3]) / 255.0F);
-        if (effective_opacity <= 0.0F) {
-          continue;
-        }
-        dst[0] = clamp_byte(static_cast<float>(src[0]) * effective_opacity +
-                            static_cast<float>(dst[0]) * (1.0F - effective_opacity));
-        dst[1] = clamp_byte(static_cast<float>(src[1]) * effective_opacity +
-                            static_cast<float>(dst[1]) * (1.0F - effective_opacity));
-        dst[2] = clamp_byte(static_cast<float>(src[2]) * effective_opacity +
-                            static_cast<float>(dst[2]) * (1.0F - effective_opacity));
-      }
-      if (palette_snap != nullptr) {
-        patchy::snap_pixel_to_palette(dst, channels, *palette_snap);
-      }
-      dirty = dirty.united(QRect(document_point, QSize(1, 1)));
-    }
-    tick_processing_operation();
-  }
-  return dirty;
+        return static_cast<float>(selection_alpha_at(point)) / 255.0F;
+      });
+  return to_qrect(dirty);
 }
 
 }  // namespace patchy::ui

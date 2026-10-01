@@ -4,7 +4,9 @@
 #include <glib/gstdio.h>
 
 #include <algorithm>
+#include <filesystem>
 #include <string>
+#include <vector>
 
 namespace lienzo::gnome {
 
@@ -635,6 +637,96 @@ int autosave_interval_minutes() {
           5),
       1,
       60);
+}
+
+std::vector<std::string> recent_documents() {
+  GKeyFile* file =
+      load_preferences();
+
+  gsize length = 0;
+
+  gchar** values =
+      g_key_file_get_string_list(
+          file,
+          "recent",
+          "files",
+          &length,
+          nullptr);
+
+  std::vector<std::string> result;
+
+  if (values != nullptr) {
+    for (gsize i = 0; i < length; ++i) {
+      if (
+          values[i] != nullptr &&
+          values[i][0] != '\0') {
+        result.emplace_back(values[i]);
+      }
+    }
+
+    g_strfreev(values);
+  }
+
+  g_key_file_free(file);
+  return result;
+}
+
+void remember_recent_document(
+    const std::filesystem::path& path) {
+  if (path.empty()) {
+    return;
+  }
+
+  gchar* utf8 =
+      g_filename_to_utf8(
+          path.string().c_str(),
+          -1,
+          nullptr,
+          nullptr,
+          nullptr);
+
+  if (utf8 == nullptr) {
+    return;
+  }
+
+  const std::string stored(utf8);
+  g_free(utf8);
+
+  auto files = recent_documents();
+
+  std::erase_if(
+      files,
+      [&](const std::string& existing) {
+        return existing == stored;
+      });
+
+  files.insert(files.begin(), stored);
+
+  constexpr std::size_t kMaxRecentDocuments = 12;
+
+  if (files.size() > kMaxRecentDocuments) {
+    files.resize(kMaxRecentDocuments);
+  }
+
+  std::vector<const char*> pointers;
+  pointers.reserve(files.size());
+
+  for (const auto& file : files) {
+    pointers.push_back(file.c_str());
+  }
+
+  GKeyFile* key =
+      load_preferences();
+
+  g_key_file_set_string_list(
+      key,
+      "recent",
+      "files",
+      pointers.data(),
+      pointers.size());
+
+  save_preferences(key);
+  g_key_file_free(key);
 }
 
 }  // namespace lienzo::gnome

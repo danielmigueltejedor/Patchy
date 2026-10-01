@@ -124,6 +124,24 @@ bool document_position(
       *y < state->document->height();
 }
 
+void widget_to_document(
+    CanvasState* state,
+    double widget_x,
+    double widget_y,
+    double* x,
+    double* y) {
+  const auto view =
+      geometry(state);
+
+  *x =
+      (widget_x - view.x) /
+      view.zoom;
+
+  *y =
+      (widget_y - view.y) /
+      view.zoom;
+}
+
 patchy::Rect normalized_document_rect(
     double x0,
     double y0,

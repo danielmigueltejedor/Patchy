@@ -1,11 +1,14 @@
 #include "ui-gnome/inspector.hpp"
+#include "ui-gnome/adjustment_dialog.hpp"
+#include "ui-gnome/layer_style_dialog.hpp"
 #include "ui-gnome/layer_thumbnail.hpp"
-#include "render/compositor.hpp"
 #include "core/adjustment_layer.hpp"
 
 #include <adwaita.h>
 
+#include <algorithm>
 #include <cstdint>
+#include <set>
 #include <string>
 
 namespace lienzo::gnome {
@@ -19,6 +22,11 @@ struct InspectorState {
   GtkListBox* layers{};
   GtkListBox* channels{};
   GtkListBox* paths{};
+
+  std::vector<std::uint8_t> composite_sample;
+  bool has_composite_sample{false};
+  guint refresh_idle{0};
+  std::set<patchy::LayerId> collapsed_groups;
 };
 
 struct LayerBinding {
@@ -58,6 +66,103 @@ void visibility_changed(
   if (binding->state->canvas.refresh) {
     binding->state->canvas.refresh();
   }
+}
+
+void rebuild_layers(InspectorState* state);
+
+struct LayerSettingsOpen {
+  InspectorState* state{};
+  patchy::LayerId id{};
+  GWeakRef layers{};
+};
+
+gboolean open_layer_settings_idle(gpointer data) {
+  auto* request =
+      static_cast<LayerSettingsOpen*>(data);
+  GtkWidget* layers =
+      GTK_WIDGET(g_weak_ref_get(&request->layers));
+  g_weak_ref_clear(&request->layers);
+
+  if (layers == nullptr) {
+    delete request;
+    return G_SOURCE_REMOVE;
+  }
+
+  InspectorState* state = request->state;
+  const patchy::LayerId id = request->id;
+  delete request;
+
+  const auto refresh = [state] {
+    if (state->canvas.refresh) {
+      state->canvas.refresh();
+    }
+
+    rebuild_layers(state);
+  };
+  const auto* layer =
+      std::as_const(*state->document).find_layer(id);
+
+  if (
+      layer != nullptr &&
+      patchy::layer_is_adjustment(*layer)) {
+    present_adjustment_editor(
+        *state->document,
+        id,
+        state->canvas,
+        layers,
+        refresh);
+  } else {
+    present_layer_settings(
+        *state->document,
+        id,
+        state->canvas,
+        layers,
+        refresh);
+  }
+
+  g_object_unref(layers);
+  return G_SOURCE_REMOVE;
+}
+
+void folder_toggled(
+    GtkButton*,
+    gpointer data) {
+  auto* binding =
+      static_cast<LayerBinding*>(data);
+
+  auto& collapsed =
+      binding->state->collapsed_groups;
+
+  if (collapsed.erase(binding->id) == 0) {
+    collapsed.insert(binding->id);
+  }
+
+  rebuild_layers(binding->state);
+}
+
+void layer_row_pressed(
+    GtkGestureClick* gesture,
+    int n_press,
+    double,
+    double,
+    gpointer data) {
+  if (n_press < 2) {
+    return;
+  }
+
+  gtk_gesture_set_state(
+      GTK_GESTURE(gesture),
+      GTK_EVENT_SEQUENCE_CLAIMED);
+
+  auto* binding =
+      static_cast<LayerBinding*>(data);
+  auto* request = new LayerSettingsOpen{};
+  request->state = binding->state;
+  request->id = binding->id;
+  g_weak_ref_init(
+      &request->layers,
+      binding->state->layers);
+  g_idle_add(open_layer_settings_idle, request);
 }
 
 void add_layer_rows(
@@ -109,6 +214,52 @@ void add_layer_rows(
     gtk_widget_set_valign(
         content,
         GTK_ALIGN_CENTER);
+
+    if (
+        layer.kind() ==
+        patchy::LayerKind::Group) {
+      const bool open =
+          !state->collapsed_groups.contains(
+              layer.id());
+
+      GtkWidget* disclosure =
+          gtk_button_new_with_label(
+              open ? "▾" : "▸");
+
+      gtk_widget_add_css_class(
+          disclosure,
+          "flat");
+
+      gtk_widget_set_tooltip_text(
+          disclosure,
+          open
+              ? "Compactar carpeta"
+              : "Abrir carpeta");
+
+      gtk_widget_set_sensitive(
+          disclosure,
+          !layer.children().empty());
+
+      auto* folder_binding =
+          new LayerBinding{
+              state,
+              layer.id()};
+
+      g_signal_connect_data(
+          disclosure,
+          "clicked",
+          G_CALLBACK(folder_toggled),
+          folder_binding,
+          [](gpointer data, GClosure*) {
+            delete static_cast<LayerBinding*>(
+                data);
+          },
+          GConnectFlags(0));
+
+      gtk_box_append(
+          GTK_BOX(content),
+          disclosure);
+    }
 
     GtkWidget* visible =
         gtk_check_button_new();
@@ -198,6 +349,33 @@ void add_layer_rows(
         GTK_BOX(content),
         name);
 
+    gtk_widget_set_tooltip_text(
+        row,
+        "Doble clic para los ajustes de la capa");
+
+    auto* click_binding =
+        new LayerBinding{
+            state,
+            layer.id()};
+
+    GtkGesture* clicks =
+        gtk_gesture_click_new();
+
+    gtk_widget_add_controller(
+        row,
+        GTK_EVENT_CONTROLLER(clicks));
+
+    g_signal_connect_data(
+        clicks,
+        "pressed",
+        G_CALLBACK(layer_row_pressed),
+        click_binding,
+        [](gpointer data, GClosure*) {
+          delete static_cast<LayerBinding*>(
+              data);
+        },
+        GConnectFlags(0));
+
     gtk_list_box_row_set_child(
         GTK_LIST_BOX_ROW(row),
         content);
@@ -217,7 +395,9 @@ void add_layer_rows(
 
     if (
         layer.kind() ==
-        patchy::LayerKind::Group) {
+            patchy::LayerKind::Group &&
+        !state->collapsed_groups.contains(
+            layer.id())) {
       add_layer_rows(
           state,
           layer.children(),
@@ -326,6 +506,96 @@ GtkWidget* make_channel_row(
   return row;
 }
 
+constexpr int kChannelThumb = 40;
+
+void fill_component_thumbnails(
+    const InspectorState* state,
+    patchy::PixelBuffer& composite_gray,
+    patchy::PixelBuffer& red,
+    patchy::PixelBuffer& green,
+    patchy::PixelBuffer& blue) {
+  composite_gray = patchy::PixelBuffer(
+      kChannelThumb,
+      kChannelThumb,
+      patchy::PixelFormat::gray8());
+
+  red = patchy::PixelBuffer(
+      kChannelThumb,
+      kChannelThumb,
+      patchy::PixelFormat::gray8());
+
+  green = patchy::PixelBuffer(
+      kChannelThumb,
+      kChannelThumb,
+      patchy::PixelFormat::gray8());
+
+  blue = patchy::PixelBuffer(
+      kChannelThumb,
+      kChannelThumb,
+      patchy::PixelFormat::gray8());
+
+  const bool ready =
+      state->has_composite_sample &&
+      state->composite_sample.size() >=
+          static_cast<std::size_t>(
+              kChannelThumb) *
+              static_cast<std::size_t>(
+                  kChannelThumb) *
+              4;
+
+  if (!ready) {
+    composite_gray.clear(180);
+    red.clear(180);
+    green.clear(180);
+    blue.clear(180);
+    return;
+  }
+
+  for (int y = 0; y < kChannelThumb; ++y) {
+    auto composite_dest =
+        composite_gray.row(y);
+    auto red_dest = red.row(y);
+    auto green_dest = green.row(y);
+    auto blue_dest = blue.row(y);
+
+    for (int x = 0; x < kChannelThumb; ++x) {
+      const auto* pixel =
+          state->composite_sample.data() +
+          (static_cast<std::size_t>(y) *
+               static_cast<std::size_t>(
+                   kChannelThumb) +
+           static_cast<std::size_t>(x)) *
+              4;
+
+      const auto r =
+          white_backed_component(
+              pixel[0],
+              pixel[3]);
+
+      const auto g =
+          white_backed_component(
+              pixel[1],
+              pixel[3]);
+
+      const auto b =
+          white_backed_component(
+              pixel[2],
+              pixel[3]);
+
+      red_dest[static_cast<std::size_t>(x)] = r;
+      green_dest[static_cast<std::size_t>(x)] = g;
+      blue_dest[static_cast<std::size_t>(x)] = b;
+
+      composite_dest[static_cast<std::size_t>(x)] =
+          static_cast<std::uint8_t>(
+              (static_cast<int>(r) * 30 +
+               static_cast<int>(g) * 59 +
+               static_cast<int>(b) * 11) /
+              100);
+    }
+  }
+}
+
 void rebuild_channels(
     InspectorState* state) {
   clear_list(
@@ -335,104 +605,17 @@ void rebuild_channels(
       std::as_const(
           *state->document);
 
-  std::vector<std::uint8_t> alpha;
+  patchy::PixelBuffer composite_gray;
+  patchy::PixelBuffer red;
+  patchy::PixelBuffer green;
+  patchy::PixelBuffer blue;
 
-  const auto composite =
-      patchy::Compositor{}.flatten_rgb8(
-          document,
-          &alpha);
-
-  patchy::PixelBuffer composite_gray(
-      document.width(),
-      document.height(),
-      patchy::PixelFormat::gray8());
-
-  patchy::PixelBuffer red(
-      document.width(),
-      document.height(),
-      patchy::PixelFormat::gray8());
-
-  patchy::PixelBuffer green(
-      document.width(),
-      document.height(),
-      patchy::PixelFormat::gray8());
-
-  patchy::PixelBuffer blue(
-      document.width(),
-      document.height(),
-      patchy::PixelFormat::gray8());
-
-  for (
-      int y = 0;
-      y < document.height();
-      ++y) {
-    const auto source =
-        composite.row(y);
-
-    auto composite_dest =
-        composite_gray.row(y);
-
-    auto red_dest =
-        red.row(y);
-
-    auto green_dest =
-        green.row(y);
-
-    auto blue_dest =
-        blue.row(y);
-
-    for (
-        int x = 0;
-        x < document.width();
-        ++x) {
-      const std::size_t pixel_index =
-          static_cast<std::size_t>(y) *
-              static_cast<std::size_t>(
-                  document.width()) +
-          static_cast<std::size_t>(x);
-
-      const auto* pixel =
-          source.data() +
-          static_cast<std::size_t>(x) * 3U;
-
-      const auto a =
-          pixel_index < alpha.size()
-              ? alpha[pixel_index]
-              : 255;
-
-      const auto r =
-          white_backed_component(
-              pixel[0],
-              a);
-
-      const auto g =
-          white_backed_component(
-              pixel[1],
-              a);
-
-      const auto b =
-          white_backed_component(
-              pixel[2],
-              a);
-
-      red_dest[
-          static_cast<std::size_t>(x)] = r;
-
-      green_dest[
-          static_cast<std::size_t>(x)] = g;
-
-      blue_dest[
-          static_cast<std::size_t>(x)] = b;
-
-      composite_dest[
-          static_cast<std::size_t>(x)] =
-          static_cast<std::uint8_t>(
-              (static_cast<int>(r) * 30 +
-               static_cast<int>(g) * 59 +
-               static_cast<int>(b) * 11) /
-              100);
-    }
-  }
+  fill_component_thumbnails(
+      state,
+      composite_gray,
+      red,
+      green,
+      blue);
 
   gtk_list_box_append(
       state->channels,
@@ -616,7 +799,7 @@ void refresh_after_layer_change(
 struct RenameDialogContext {
   InspectorState* state{};
   GtkWidget* entry{};
-  GtkWindow* dialog{};
+  AdwDialog* dialog{};
   patchy::LayerId id{};
 };
 
@@ -645,8 +828,7 @@ void apply_rename_clicked(
     }
   }
 
-  gtk_window_destroy(
-      context->dialog);
+  adw_dialog_close(context->dialog);
 }
 
 void destroy_rename_context(
@@ -677,97 +859,54 @@ void rename_layer_clicked(
     return;
   }
 
-  GtkWidget* dialog =
-      gtk_window_new();
+  AdwDialog* dialog = ADW_DIALOG(adw_dialog_new());
+  adw_dialog_set_title(dialog, "Cambiar nombre");
+  adw_dialog_set_content_width(dialog, 360);
 
-  gtk_window_set_title(
-      GTK_WINDOW(dialog),
-      "Cambiar nombre");
-
-  gtk_window_set_transient_for(
-      GTK_WINDOW(dialog),
-      GTK_WINDOW(
-          gtk_widget_get_root(
-              GTK_WIDGET(state->layers))));
-
-  gtk_window_set_modal(
-      GTK_WINDOW(dialog),
-      TRUE);
-
-  GtkWidget* box =
-      gtk_box_new(
-          GTK_ORIENTATION_VERTICAL,
-          12);
-
-  gtk_widget_set_margin_top(box, 16);
-  gtk_widget_set_margin_bottom(box, 16);
-  gtk_widget_set_margin_start(box, 16);
-  gtk_widget_set_margin_end(box, 16);
-
-  GtkWidget* entry =
-      gtk_entry_new();
-
+  GtkWidget* entry = adw_entry_row_new();
+  adw_preferences_row_set_title(
+      ADW_PREFERENCES_ROW(entry),
+      "Nombre");
   gtk_editable_set_text(
       GTK_EDITABLE(entry),
       layer->name().c_str());
-
   gtk_editable_select_region(
       GTK_EDITABLE(entry),
       0,
       -1);
 
-  GtkWidget* buttons =
-      gtk_box_new(
-          GTK_ORIENTATION_HORIZONTAL,
-          6);
-
-  gtk_widget_set_halign(
-      buttons,
-      GTK_ALIGN_END);
-
-  GtkWidget* cancel =
-      gtk_button_new_with_label(
-          "Cancelar");
-
-  GtkWidget* apply =
-      gtk_button_new_with_label(
-          "Cambiar nombre");
-
-  gtk_widget_add_css_class(
-      apply,
-      "suggested-action");
-
-  gtk_box_append(
-      GTK_BOX(buttons),
-      cancel);
-
-  gtk_box_append(
-      GTK_BOX(buttons),
-      apply);
-
-  gtk_box_append(
-      GTK_BOX(box),
+  GtkWidget* group = adw_preferences_group_new();
+  adw_preferences_group_add(
+      ADW_PREFERENCES_GROUP(group),
       entry);
 
-  gtk_box_append(
-      GTK_BOX(box),
-      buttons);
+  GtkWidget* cancel =
+      gtk_button_new_with_label("Cancelar");
+  GtkWidget* apply =
+      gtk_button_new_with_label("Cambiar nombre");
+  gtk_widget_add_css_class(apply, "suggested-action");
 
-  gtk_window_set_child(
-      GTK_WINDOW(dialog),
-      box);
+  GtkWidget* header = adw_header_bar_new();
+  adw_header_bar_pack_start(ADW_HEADER_BAR(header), cancel);
+  adw_header_bar_pack_end(ADW_HEADER_BAR(header), apply);
+
+  GtkWidget* toolbar = adw_toolbar_view_new();
+  adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(toolbar), header);
+  adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(toolbar), group);
+  adw_dialog_set_child(dialog, toolbar);
+  adw_dialog_set_default_widget(dialog, apply);
 
   g_signal_connect_swapped(
       cancel,
       "clicked",
-      G_CALLBACK(gtk_window_destroy),
+      G_CALLBACK(adw_dialog_close),
       dialog);
 
   auto* rename_context =
       new RenameDialogContext{
           state,
           entry,
-          GTK_WINDOW(dialog),
+          dialog,
           *active};
 
   g_signal_connect_data(
@@ -778,8 +917,9 @@ void rename_layer_clicked(
       destroy_rename_context,
       GConnectFlags(0));
 
-  gtk_window_present(
-      GTK_WINDOW(dialog));
+  adw_dialog_present(
+      dialog,
+      GTK_WIDGET(state->layers));
 }
 
 void add_group_clicked(
@@ -1046,6 +1186,90 @@ void remove_layer_clicked(
   }
 }
 
+gboolean flush_inspector_refresh(
+    gpointer data) {
+  auto* state =
+      static_cast<InspectorState*>(data);
+
+  state->refresh_idle = 0;
+  rebuild_layers(state);
+  rebuild_paths(state);
+
+  return G_SOURCE_REMOVE;
+}
+
+void schedule_inspector_refresh(
+    InspectorState* state) {
+  if (state->refresh_idle != 0) {
+    return;
+  }
+
+  state->refresh_idle =
+      g_idle_add(
+          flush_inspector_refresh,
+          state);
+}
+
+void remember_composite_sample(
+    InspectorState* state,
+    const std::uint8_t* rgba,
+    int width,
+    int height,
+    int stride) {
+  constexpr int thumb = kChannelThumb;
+
+  state->composite_sample.assign(
+      static_cast<std::size_t>(thumb) *
+          static_cast<std::size_t>(thumb) *
+          4,
+      0);
+
+  state->has_composite_sample =
+      rgba != nullptr &&
+      width > 0 &&
+      height > 0 &&
+      stride >= width * 4;
+
+  if (!state->has_composite_sample) {
+    return;
+  }
+
+  for (int y = 0; y < thumb; ++y) {
+    const int sy = std::clamp(
+        y * height / thumb,
+        0,
+        height - 1);
+
+    const auto* row =
+        rgba +
+        static_cast<std::size_t>(sy) *
+            static_cast<std::size_t>(stride);
+
+    for (int x = 0; x < thumb; ++x) {
+      const int sx = std::clamp(
+          x * width / thumb,
+          0,
+          width - 1);
+
+      const auto* pixel =
+          row +
+          static_cast<std::size_t>(sx) * 4;
+
+      auto* dest =
+          state->composite_sample.data() +
+          (static_cast<std::size_t>(y) *
+               static_cast<std::size_t>(thumb) +
+           static_cast<std::size_t>(x)) *
+              4;
+
+      dest[0] = pixel[0];
+      dest[1] = pixel[1];
+      dest[2] = pixel[2];
+      dest[3] = pixel[3];
+    }
+  }
+}
+
 }  // namespace
 
 GtkWidget* create_inspector(
@@ -1071,18 +1295,18 @@ GtkWidget* create_inspector(
       -1);
 
   GtkWidget* stack =
-      gtk_stack_new();
-
-  gtk_stack_set_transition_type(
-      GTK_STACK(stack),
-      GTK_STACK_TRANSITION_TYPE_CROSSFADE);
+      adw_view_stack_new();
 
   GtkWidget* switcher =
-      gtk_stack_switcher_new();
+      adw_view_switcher_new();
 
-  gtk_stack_switcher_set_stack(
-      GTK_STACK_SWITCHER(switcher),
-      GTK_STACK(stack));
+  adw_view_switcher_set_policy(
+      ADW_VIEW_SWITCHER(switcher),
+      ADW_VIEW_SWITCHER_POLICY_NARROW);
+
+  adw_view_switcher_set_stack(
+      ADW_VIEW_SWITCHER(switcher),
+      ADW_VIEW_STACK(stack));
 
   gtk_widget_set_halign(
       switcher,
@@ -1111,6 +1335,10 @@ GtkWidget* create_inspector(
   state->layers =
       GTK_LIST_BOX(
           gtk_list_box_new());
+
+  gtk_widget_add_css_class(
+      GTK_WIDGET(state->layers),
+      "navigation-sidebar");
 
   gtk_list_box_set_selection_mode(
       state->layers,
@@ -1273,6 +1501,10 @@ GtkWidget* create_inspector(
       GTK_LIST_BOX(
           gtk_list_box_new());
 
+  gtk_widget_add_css_class(
+      GTK_WIDGET(state->channels),
+      "navigation-sidebar");
+
   GtkWidget* channels_scroll =
       gtk_scrolled_window_new();
 
@@ -1366,6 +1598,10 @@ GtkWidget* create_inspector(
   state->paths =
       GTK_LIST_BOX(
           gtk_list_box_new());
+
+  gtk_widget_add_css_class(
+      GTK_WIDGET(state->paths),
+      "navigation-sidebar");
 
   GtkWidget* paths_scroll =
       gtk_scrolled_window_new();
@@ -1539,23 +1775,26 @@ GtkWidget* create_inspector(
         document.indexed_palette()->colors);
   }
 
-  gtk_stack_add_titled(
-      GTK_STACK(stack),
+  adw_view_stack_add_titled_with_icon(
+      ADW_VIEW_STACK(stack),
       layers_page,
       "layers",
-      "Capas");
+      "Capas",
+      "view-list-symbolic");
 
-  gtk_stack_add_titled(
-      GTK_STACK(stack),
+  adw_view_stack_add_titled_with_icon(
+      ADW_VIEW_STACK(stack),
       channels_page,
       "channels",
-      "Canales");
+      "Canales",
+      "color-select-symbolic");
 
-  gtk_stack_add_titled(
-      GTK_STACK(stack),
+  adw_view_stack_add_titled_with_icon(
+      ADW_VIEW_STACK(stack),
       paths_scroll,
       "paths",
-      "Trazados");
+      "Trazados",
+      "draw-freehand-symbolic");
 
 
   gtk_box_append(
@@ -1575,27 +1814,30 @@ GtkWidget* create_inspector(
       GTK_BOX(root),
       stack);
 
+  GtkWidget* sections =
+      adw_preferences_group_new();
+
   const auto add_collapsible_panel =
-      [root](
+      [sections](
           const char* title,
           GtkWidget* child) {
         GtkWidget* expander =
-            gtk_expander_new(title);
+            adw_expander_row_new();
 
-        gtk_expander_set_child(
-            GTK_EXPANDER(expander),
-            child);
+        adw_preferences_row_set_title(
+            ADW_PREFERENCES_ROW(expander),
+            title);
 
-        gtk_expander_set_expanded(
-            GTK_EXPANDER(expander),
+        adw_expander_row_set_expanded(
+            ADW_EXPANDER_ROW(expander),
             FALSE);
 
-        gtk_widget_add_css_class(
-            expander,
-            "lienzo-inspector-section");
+        adw_expander_row_add_row(
+            ADW_EXPANDER_ROW(expander),
+            child);
 
-        gtk_box_append(
-            GTK_BOX(root),
+        adw_preferences_group_add(
+            ADW_PREFERENCES_GROUP(sections),
             expander);
       };
 
@@ -1614,6 +1856,10 @@ GtkWidget* create_inspector(
   add_collapsible_panel(
       "Paleta",
       palette_page);
+
+  gtk_box_append(
+      GTK_BOX(root),
+      sections);
 
   g_signal_connect(
       rename,
@@ -1656,8 +1902,23 @@ GtkWidget* create_inspector(
       "lienzo-inspector-state",
       state,
       [](gpointer data) {
-        delete static_cast<InspectorState*>(
-            data);
+        auto* inspector_state =
+            static_cast<InspectorState*>(data);
+
+        if (inspector_state->refresh_idle != 0) {
+          g_source_remove(
+              inspector_state->refresh_idle);
+          inspector_state->refresh_idle = 0;
+        }
+
+        if (
+            inspector_state->canvas
+                .set_composite_callback) {
+          inspector_state->canvas
+              .set_composite_callback({});
+        }
+
+        delete inspector_state;
       });
 
   rebuild_layers(state);
@@ -1683,9 +1944,39 @@ void refresh_inspector(
     return;
   }
 
-  rebuild_layers(state);
+  schedule_inspector_refresh(state);
+}
+
+void update_inspector_composite(
+    GtkWidget* inspector,
+    const std::uint8_t* rgba,
+    int width,
+    int height,
+    int stride) {
+  if (
+      inspector == nullptr ||
+      rgba == nullptr) {
+    return;
+  }
+
+  auto* state =
+      static_cast<InspectorState*>(
+          g_object_get_data(
+              G_OBJECT(inspector),
+              "lienzo-inspector-state"));
+
+  if (state == nullptr) {
+    return;
+  }
+
+  remember_composite_sample(
+      state,
+      rgba,
+      width,
+      height,
+      stride);
+
   rebuild_channels(state);
-  rebuild_paths(state);
 }
 
 }  // namespace lienzo::gnome

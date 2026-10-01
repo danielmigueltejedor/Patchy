@@ -49,7 +49,7 @@ Known piles:
 - Selection state: `CanvasWidget` stores `QImage` masks (`canvas_widget.hpp`). Algorithms that already exist in core are `quick_select_segment`, `LiveWireEngine`, `color_within_tolerance`, and `trace_mask_outlines`. The GNOME `SelectionController` keeps its own mask. Quick Select stamps a footprint and calls `quick_select_segment` once on release, the same call Patchy makes. Magic Wand uses `color_within_tolerance`; the contiguous flood itself is still the controller's, because Patchy keeps that flood in `CanvasWidget` rather than in `src/core`.
 - History policy: `MainWindow::DocumentSession` stores document snapshots, selection snapshots, labels, coalescing, and the memory budget. Whole-`Document` copies are already cheap for shared payloads (`document_memory.hpp`). The policy is UI. The GNOME canvas keeps a private `undo_stack` of bare `Document` values and does not restore selection.
 - Text layout and the Photoshop text pipeline: `src/ui/text_layout.cpp` and the text code in `main_window.cpp`. Calibration lives in `docs/text-tool.md` and `docs/txt2.md`. The GNOME `TextController` shapes with Pango and writes its own layer metadata. That is a second text engine. Do not ship it as the document text model.
-- Retouch: healing, spot healing, and patch live in `src/core` and are documented in `docs/healing.md`. `RetouchController` does not call those APIs. It paints from the composite buffer itself.
+- Retouch: clone, healing, blur, sharpen, dodge, burn, and sponge share `src/core/retouch_brush.cpp`. Both canvases call it. GNOME's opacity slider is the adjustment strength and the clone opacity. The options bar sets tone range, protect tones, sponge mode, and healing diffusion. Defaults stay midtones, protect tones, desaturate with vibrance, and diffusion 5. Spot healing and the patch tool still live in `CanvasWidget` (`docs/healing.md`). The GNOME controller does not expose those two.
 - File dialogs, scripting, and MCP are product/UI. Scripting and MCP stay required (class B in the matrix) but their implementation is Qt. Do not reimplement the script API in the GNOME layer.
 
 ### C. Shared infrastructure
@@ -66,7 +66,9 @@ Root `CMakeLists.txt`, presets, `tests/core`, translation catalogs, and `scripts
 
 `CanvasState` and the functions shared across canvas translation units live in `canvas_internal.hpp`. Only `src/ui-gnome/canvas*.cpp` may include it. The split is by responsibility: `canvas.cpp` builds the widget, `canvas_input.cpp` dispatches gestures, `canvas_render.cpp` owns the composite cache, `canvas_overlay.cpp` draws overlays, `canvas_brush.cpp` strokes through `patchy::paint_brush_*`, `canvas_move.cpp` previews a move, `canvas_selection.cpp` syncs the selection and runs the magnetic lasso, `canvas_view.cpp` converts coordinates, and `canvas_session.cpp` owns history, clipboard, and crop commit. A new tool's pixel work goes through an existing `patchy::` function. Its gesture goes in `canvas_input.cpp` or a controller under `tools/`, not into a new copy of the brush loop. Controllers that already exist: selection, text, path, retouch.
 
-`inspector.cpp` is the layers, channels, and paths panel, plus a history page that shows a single static row. `main_window.cpp` owns the welcome page, tabs, open/save/export, and autosave. Strings in this layer are hardcoded Spanish. New user-visible strings follow `docs/localization.md` once a surface is stable enough to extract. Do not add another catalog pass over prototype copy.
+`inspector.cpp` is the layers, channels, and paths panel, plus a history page that shows a single static row. Layer and channel thumbnails sample a 40px grid. They do not copy or flatten the document. A stroke ends by scheduling that panel refresh, so a tool change is not stuck behind it. `main_window.cpp` owns the welcome page, tabs, open/save/export, and autosave. The welcome page lists documents opened or saved in Lienzo, newest first, and skips paths that are no longer on disk. Each row carries one small thumbnail. A double click, or Enter, opens that file. Thumbnails are 128px PNGs in the user cache, named from a stable path hash plus the file's modification time and size. An unchanged file loads that PNG on the UI thread. A miss is built one at a time off the main thread, then written atomically. The cache keeps only the identities of the rows currently shown. Open and save go through the desktop portal (`file_portal.cpp`), which is the GNOME Files chooser. Opening a file reads it and builds the canvas preview on a worker, then presents the tab on the main thread. Export as opens `export_dialog.cpp` for the format and its settings, then the same chooser. Strings in this layer are hardcoded Spanish. New user-visible strings follow `docs/localization.md` once a surface is stable enough to extract. Do not add another catalog pass over prototype copy.
+
+Documents wider than 4096 pixels, or over 12 megapixels, keep a downscaled canvas preview. The full pixels stay in the document. The preview is one composite when the document is at most 24 megapixels, otherwise strips of 128 source rows, then a downsample. A later stroke updates the dirty preview pixels from one region composite. Undo on a large document keeps fewer snapshots so a long edit does not retain dozens of full copies. Every tool hides the system cursor and draws its own pointer with the same dark halo and light stroke. Brush-like tools, including dodge, burn, sponge, blur, sharpen, clone, and healing, draw the footprint from brush size, roundness, angle, and square or round shape, plus a small mark for that tool. The eyedropper draws a pipette and, over pixels, a ring split between the sampled color and the foreground. Other tools use a short crosshair, an arrow, or a small solid glyph, with the hotspot at the tip. The gradient tool previews the blend while dragging, then paints from the foreground color to the background color. Its options are linear or radial, opacity, and reverse. Fill and the magic wand expose tolerance and contiguous. Folder rows in the layers panel collapse and expand. A double-click on a pixel layer opens its settings as an Adwaita preferences page. General is an open group. Blend options and each effect are collapsed expander rows, with the effect switch on the row itself. Numbers are spin rows. Choices stay menu buttons so the dialog never builds a GtkDropDown. A double-click on an adjustment layer opens the same kind of page. Curves and levels use the shared LUT, a gradient strip, and channel toggles. Curve points are draggable. The other kinds use spin rows and the same transfer graph when a LUT exists. Apply writes through `configure_adjustment_layer`. Cancel discards the dialog state. Closing the window or a document tab asks before discarding edits.
 
 ### F. Temporary compatibility
 
@@ -85,11 +87,12 @@ Class: A parity required, B Lienzo keeps it, C not decided and not a GNOME block
 | Feature | Qt | GNOME | Engine | Tests | Class |
 |---|---|---|---|---|---|
 | Open/save PSD/PSB | yes | yes | yes | core | A |
+| Open/save Pixelmator PXD | registry | yes, zip and directory package | yes | core | A |
 | Export flattened formats | yes | yes | yes | core | A |
 | New document | yes | yes | yes | partial | A |
 | Layers list, visibility, rename, group, mask, delete | yes | yes | yes | ui | A |
-| Layer styles and effects | yes | no | yes | core | D |
-| Blend-mode editing | yes | no | yes | core | D |
+| Layer styles and effects | yes | yes, layer settings dialog | yes | core | A |
+| Blend-mode editing | yes | yes, layer settings dialog | yes | core | A |
 | Channels and quick mask | yes | partial | yes | ui | A |
 | Paths panel | yes | list only | yes | ui | A |
 | History (labels, selection, budget) | yes | document copies only, panel stub | snapshots are cheap; policy is UI | ui | A |
@@ -103,12 +106,12 @@ Class: A parity required, B Lienzo keeps it, C not decided and not a GNOME block
 | Brush, flow, airbrush, tips | yes | partial, calls `paint_brush_*` | yes | core canary | A |
 | Mixer brush | yes | tool id only | yes | core | D |
 | Fill and gradient | yes | calls core draw helpers | yes | core | A |
-| Clone, heal, spot heal, patch | yes | local painter, not core healing | yes | core | A |
-| Blur, sharpen, dodge, burn, sponge, smudge | yes | local retouch modes | partial | mixed | A |
+| Clone, heal, spot heal, patch | yes | clone and healing call `retouch_brush`; spot heal and patch are absent | yes | core | A |
+| Blur, sharpen, dodge, burn, sponge, smudge | yes | yes, calls `retouch_brush` and `smudge_brush_segment` | yes | core | A |
 | Pen and vector paths | yes | `PathController` | yes | core | A |
 | Shape layers | yes | drag preview | yes | core | A |
 | Text (TySh/Txt2, calibrated layout) | yes | Pango preview and commit | layout is still in `src/ui` | ui, psd | A |
-| Adjustment layers | yes | create only | yes | core | D |
+| Adjustment layers | yes | create and edit | yes | core | A |
 | Smart objects | yes | no | yes | core | D |
 | Smart filters | yes | no | yes | core | D |
 | Filter gallery, liquify | yes | no | yes | core/ui | D |
@@ -148,4 +151,4 @@ Protected identity paths stay protected: packaging, README, `AGENTS.md`, release
 
 ## Next boundary
 
-Clone, healing, blur, sharpen, dodge, burn, and sponge are not core functions. Patchy implements them inside `CanvasWidget` (`canvas_widget_brush.cpp`, `canvas_widget_spot_healing.cpp`, `canvas_widget_patch_tool.cpp`). The GNOME `RetouchController` is a second painter and is not the performance path. Extracting those loops into the engine means moving the pixel math without changing it, then pointing both UIs at that function. Do that only with the tool-write canary running: the Qt brush path is byte-pinned. Text stays on the calibrated pipeline in `src/ui` until that pipeline can be called without a `QWidget`.
+Spot healing and the patch tool still run inside `CanvasWidget` (`canvas_widget_spot_healing.cpp`, `canvas_widget_patch_tool.cpp`). Their pixel math is already `solve_heal_membrane` and `spot_heal_source_map`. GNOME does not call them yet. Text stays on the calibrated pipeline in `src/ui` until that pipeline can be called without a `QWidget`. The Qt brush path, including clone and the local-adjustment brushes, stays byte-pinned: `retouch_brush` is that math, and both canvases call it.
