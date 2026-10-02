@@ -465,10 +465,6 @@ void drag_begin(
                 mode,
                 dx,
                 dy,
-                state->composite_rgba,
-                state->composite_width,
-                state->composite_height,
-                state->composite_stride,
                 RetouchBrushSettings{
                     state->edit_options
                         .brush_size,

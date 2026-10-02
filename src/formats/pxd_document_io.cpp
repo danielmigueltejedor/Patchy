@@ -23,10 +23,6 @@
 #include <utility>
 #include <vector>
 
-#if defined(PATCHY_HAS_LIBHEIF)
-#include <libheif/heif.h>
-#endif
-
 #if defined(PATCHY_HAS_SQLITE)
 #include <sqlite3.h>
 #endif
@@ -375,138 +371,11 @@ struct EncodedTile {
   const char* uti{"public.png"};
 };
 
-#if defined(PATCHY_HAS_LIBHEIF)
-
-extern "C" heif_error append_heif_bytes(heif_context*, const void* data, size_t size, void* userdata) {
-  auto* output = static_cast<std::vector<std::uint8_t>*>(userdata);
-  const auto* bytes = static_cast<const std::uint8_t*>(data);
-  output->insert(output->end(), bytes, bytes + size);
-  return {heif_error_Ok, heif_suberror_Unspecified, nullptr};
-}
-
-std::vector<std::uint8_t> encode_heic_rgba(const RgbaImage& image) {
-  if (image.width <= 0 || image.height <= 0 || image.rgba.empty()) {
-    return {};
-  }
-  heif_image* heif_image = nullptr;
-  heif_error error = heif_image_create(image.width, image.height, heif_colorspace_RGB,
-                                       heif_chroma_interleaved_RGBA, &heif_image);
-  if (error.code != heif_error_Ok || heif_image == nullptr) {
-    return {};
-  }
-  error = heif_image_add_plane(heif_image, heif_channel_interleaved, image.width, image.height, 8);
-  int stride = 0;
-  std::uint8_t* plane = heif_image_get_plane(heif_image, heif_channel_interleaved, &stride);
-  if (error.code != heif_error_Ok || plane == nullptr || stride < image.width * 4) {
-    heif_image_release(heif_image);
-    return {};
-  }
-  for (int y = 0; y < image.height; ++y) {
-    std::memcpy(plane + static_cast<std::size_t>(y) * static_cast<std::size_t>(stride),
-                image.rgba.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(image.width) * 4,
-                static_cast<std::size_t>(image.width) * 4);
-  }
-  heif_context* context = heif_context_alloc();
-  if (context == nullptr) {
-    heif_image_release(heif_image);
-    return {};
-  }
-  heif_encoder* encoder = nullptr;
-  error = heif_context_get_encoder_for_format(context, heif_compression_HEVC, &encoder);
-  if (error.code != heif_error_Ok || encoder == nullptr) {
-    if (encoder != nullptr) {
-      heif_encoder_release(encoder);
-    }
-    if (context != nullptr) {
-      heif_context_free(context);
-    }
-    heif_image_release(heif_image);
-    return {};
-  }
-  heif_encoder_set_lossless(encoder, 1);
-  heif_encoder_set_parameter_string(encoder, "chroma", "444");
-  heif_encoding_options* options = heif_encoding_options_alloc();
-  heif_color_profile_nclx* nclx = heif_nclx_color_profile_alloc();
-  if (nclx != nullptr) {
-    heif_nclx_color_profile_set_matrix_coefficients(nclx, heif_matrix_coefficients_RGB_GBR);
-    nclx->full_range_flag = 1;
-  }
-  if (options != nullptr) {
-    options->output_nclx_profile = nclx;
-  }
-  error = heif_context_encode_image(context, heif_image, encoder, options, nullptr);
-  heif_nclx_color_profile_free(nclx);
-  heif_encoding_options_free(options);
-  heif_encoder_release(encoder);
-  heif_image_release(heif_image);
-  std::vector<std::uint8_t> encoded;
-  if (error.code == heif_error_Ok) {
-    heif_writer writer{};
-    writer.writer_api_version = 1;
-    writer.write = append_heif_bytes;
-    error = heif_context_write(context, &writer, &encoded);
-  }
-  heif_context_free(context);
-  if (error.code != heif_error_Ok) {
-    return {};
-  }
-  return encoded;
-}
-
-PixelBuffer pixels_from_heic(const std::vector<std::uint8_t>& bytes) {
-  heif_context* context = heif_context_alloc();
-  if (context == nullptr) {
-    return {};
-  }
-  heif_error error = heif_context_read_from_memory(context, bytes.data(), bytes.size(), nullptr);
-  if (error.code != heif_error_Ok) {
-    heif_context_free(context);
-    return {};
-  }
-  heif_image_handle* handle = nullptr;
-  error = heif_context_get_primary_image_handle(context, &handle);
-  if (error.code != heif_error_Ok || handle == nullptr) {
-    heif_context_free(context);
-    return {};
-  }
-  heif_image* image = nullptr;
-  error = heif_decode_image(handle, &image, heif_colorspace_RGB, heif_chroma_interleaved_RGBA, nullptr);
-  heif_image_handle_release(handle);
-  if (error.code != heif_error_Ok || image == nullptr) {
-    heif_context_free(context);
-    return {};
-  }
-  const int width = heif_image_get_primary_width(image);
-  const int height = heif_image_get_primary_height(image);
-  int stride = 0;
-  const std::uint8_t* plane = heif_image_get_plane_readonly(image, heif_channel_interleaved, &stride);
-  PixelBuffer pixels;
-  if (plane != nullptr && width > 0 && height > 0 && stride >= width * 4) {
-    pixels = PixelBuffer(width, height, PixelFormat::rgba8());
-    for (int y = 0; y < height; ++y) {
-      auto row = pixels.row(y);
-      std::memcpy(row.data(), plane + static_cast<std::size_t>(y) * static_cast<std::size_t>(stride),
-                  static_cast<std::size_t>(width) * 4);
-    }
-  }
-  heif_image_release(image);
-  heif_context_free(context);
-  return pixels;
-}
-
-#endif
-
 EncodedTile encode_original_content(const Layer& layer) {
   const RgbaImage image = layer_rgba(layer);
   if (image.rgba.empty()) {
     return {};
   }
-#if defined(PATCHY_HAS_LIBHEIF)
-  auto heic = encode_heic_rgba(image);
-  if (!heic.empty()) {
-    return {std::move(heic), "public.heic"};
-  }
-#endif
   return {formats::encode_png_rgba8(image.rgba, image.width, image.height), "public.png"};
 }
 
@@ -537,11 +406,7 @@ PixelBuffer pixels_from_encoded(const std::vector<std::uint8_t>& bytes) {
   if (png_signature(bytes)) {
     return pixels_from_png(bytes);
   }
-#if defined(PATCHY_HAS_LIBHEIF)
-  return pixels_from_heic(bytes);
-#else
   return {};
-#endif
 }
 
 std::vector<std::uint8_t> apple_date_bytes() {

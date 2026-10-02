@@ -524,13 +524,6 @@ endif()
 if(TARGET PkgConfig::PATCHY_SQLITE3)
   target_compile_definitions(patchy_formats PRIVATE PATCHY_HAS_SQLITE=1)
   target_link_libraries(patchy_formats PRIVATE PkgConfig::PATCHY_SQLITE3)
-  # Pixelmator Pro 4.4 stores each raster layer as HEIC. System libheif supplies the
-  # HEVC codec; this target does not vendor one. Without it, the same slot is PNG.
-  pkg_check_modules(PATCHY_LIBHEIF QUIET IMPORTED_TARGET libheif)
-  if(TARGET PkgConfig::PATCHY_LIBHEIF)
-    target_compile_definitions(patchy_formats PRIVATE PATCHY_HAS_LIBHEIF=1)
-    target_link_libraries(patchy_formats PRIVATE PkgConfig::PATCHY_LIBHEIF)
-  endif()
 endif()
 target_link_libraries(patchy_formats PRIVATE patchy_lcms2)
 if(EMSCRIPTEN AND PATCHY_BUILD_APP)
