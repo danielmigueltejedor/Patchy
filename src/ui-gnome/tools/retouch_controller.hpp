@@ -54,10 +54,6 @@ public:
       RetouchMode mode,
       double x,
       double y,
-      const std::vector<std::uint8_t>& rgba,
-      int width,
-      int height,
-      int stride,
       RetouchBrushSettings settings,
       std::function<float(int, int)> selection_coverage);
 
@@ -83,6 +79,8 @@ private:
   [[nodiscard]] patchy::RgbaPlane plane() const noexcept;
 
   [[nodiscard]] bool copy_layer_snapshot();
+
+  [[nodiscard]] bool copy_document_composite();
 
   patchy::Document* document_{};
 

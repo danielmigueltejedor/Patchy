@@ -635,6 +635,26 @@ GtkWidget* channel_row(Editor* editor, bool curves) {
   return box;
 }
 
+void close_editor_later(GtkWidget* dialog) {
+  if (dialog == nullptr) {
+    return;
+  }
+
+  g_object_ref(dialog);
+  g_idle_add(
+      [](gpointer data) -> gboolean {
+        auto* widget = GTK_WIDGET(data);
+
+        if (ADW_IS_DIALOG(widget)) {
+          adw_dialog_close(ADW_DIALOG(widget));
+        }
+
+        g_object_unref(widget);
+        return G_SOURCE_REMOVE;
+      },
+      dialog);
+}
+
 void apply_editor(GtkButton*, gpointer data) {
   auto* editor = static_cast<Editor*>(data);
   read_controls(editor);
@@ -657,9 +677,7 @@ void apply_editor(GtkButton*, gpointer data) {
       editor->graph,
       ADW_TYPE_DIALOG);
 
-  if (dialog != nullptr) {
-    adw_dialog_close(ADW_DIALOG(dialog));
-  }
+  close_editor_later(dialog);
 }
 
 void close_editor(GtkButton*, gpointer data) {
@@ -667,10 +685,7 @@ void close_editor(GtkButton*, gpointer data) {
   GtkWidget* dialog = gtk_widget_get_ancestor(
       editor->graph,
       ADW_TYPE_DIALOG);
-
-  if (dialog != nullptr) {
-    adw_dialog_close(ADW_DIALOG(dialog));
-  }
+  close_editor_later(dialog);
 }
 
 }  // namespace
@@ -944,6 +959,38 @@ void present_adjustment_editor(
       "lienzo-adjustment-editor",
       editor,
       [](gpointer data) { delete static_cast<Editor*>(data); });
+
+  GtkWidget* host =
+      GTK_WIDGET(gtk_widget_get_ancestor(parent, GTK_TYPE_WINDOW));
+
+  if (host != nullptr) {
+    g_object_set_data(
+        G_OBJECT(host),
+        "lienzo-block-close",
+        GINT_TO_POINTER(1));
+    g_object_set_data(
+        G_OBJECT(dialog),
+        "lienzo-block-close-host",
+        host);
+  }
+
+  g_signal_connect(
+      dialog,
+      "closed",
+      G_CALLBACK(+[](AdwDialog* self, gpointer) {
+        gpointer blocked = g_object_get_data(
+            G_OBJECT(self),
+            "lienzo-block-close-host");
+
+        if (blocked != nullptr) {
+          g_object_set_data(
+              G_OBJECT(blocked),
+              "lienzo-block-close",
+              nullptr);
+        }
+      }),
+      nullptr);
+
   adw_dialog_present(ADW_DIALOG(dialog), parent);
 }
 

@@ -1,7 +1,10 @@
 #include "ui-gnome/tools/retouch_controller.hpp"
 
+#include "render/compositor.hpp"
+
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace lienzo::gnome {
 
@@ -146,14 +149,66 @@ bool RetouchController::copy_layer_snapshot() {
       stride_ > 0;
 }
 
+bool RetouchController::copy_document_composite() {
+  std::vector<std::uint8_t> alpha;
+  const auto rgb =
+      patchy::Compositor{}
+          .flatten_rgb8(
+              std::as_const(*document_),
+              &alpha);
+
+  if (
+      rgb.empty() ||
+      rgb.format().channels < 3) {
+    return false;
+  }
+
+  const int width = rgb.width();
+  const int height = rgb.height();
+  snapshot_.assign(
+      static_cast<std::size_t>(width) *
+          static_cast<std::size_t>(height) *
+          4,
+      0);
+
+  for (int y = 0; y < height; ++y) {
+    const auto row =
+        std::as_const(rgb).row(y);
+    auto* dst =
+        snapshot_.data() +
+        static_cast<std::size_t>(y) *
+            static_cast<std::size_t>(width) *
+            4;
+
+    for (int x = 0; x < width; ++x) {
+      const auto* src =
+          row.data() +
+          static_cast<std::size_t>(x) * 3;
+      const std::size_t index =
+          static_cast<std::size_t>(y) *
+              static_cast<std::size_t>(width) +
+          static_cast<std::size_t>(x);
+      dst[x * 4] = src[0];
+      dst[x * 4 + 1] = src[1];
+      dst[x * 4 + 2] = src[2];
+      dst[x * 4 + 3] =
+          index < alpha.size() ? alpha[index] : 255;
+    }
+  }
+
+  origin_x_ = 0;
+  origin_y_ = 0;
+  width_ = width;
+  height_ = height;
+  stride_ = width * 4;
+  channels_ = 4;
+  return !snapshot_.empty();
+}
+
 patchy::Rect RetouchController::begin_stroke(
     RetouchMode mode,
     double x,
     double y,
-    const std::vector<std::uint8_t>& rgba,
-    int width,
-    int height,
-    int stride,
     RetouchBrushSettings settings,
     std::function<float(int, int)> selection_coverage) {
   if (
@@ -176,20 +231,8 @@ patchy::Rect RetouchController::begin_stroke(
     if (!copy_layer_snapshot()) {
       return {};
     }
-  } else {
-    if (
-        width <= 0 ||
-        height <= 0 ||
-        stride < width * 4 ||
-        rgba.empty()) {
-      return {};
-    }
-
-    snapshot_ = rgba;
-    width_ = width;
-    height_ = height;
-    stride_ = stride;
-    channels_ = 4;
+  } else if (!copy_document_composite()) {
+    return {};
   }
 
   active_ = true;
