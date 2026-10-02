@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="src/ui/icons/lienzo-app.png" width="176" height="176" alt="Lienzo">
+  <img src="https://raw.githubusercontent.com/danielmigueltejedor/lienzo/main/src/ui/icons/lienzo-app.png" width="176" height="176" alt="Lienzo">
   <h1>Lienzo</h1>
   <p><strong>A modern, native image editor for layered creative work, PSD compatibility and local-first automation.</strong></p>
 
